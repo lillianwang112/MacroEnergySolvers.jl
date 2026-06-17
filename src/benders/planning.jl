@@ -25,6 +25,17 @@ function solve_planning_problem(m::Model,planning_variables::Vector{String})
 	
     optimize!(m)
 
+    if !has_values(m)
+        # Barrier with Crossover=0 can return INFEASIBLE_OR_UNBOUNDED when the problem
+        # is actually feasible but numerically ambiguous. Retry with crossover enabled.
+        @info "Planning solve did not return values (status: $(termination_status(m))). Retrying with crossover enabled."
+        try; set_attribute(m, "Crossover", 1);       catch; end
+        try; set_attribute(m, "run_crossover", "on"); catch; end
+        optimize!(m)
+        try; set_attribute(m, "Crossover", 0);        catch; end
+        try; set_attribute(m, "run_crossover", "off"); catch; end
+    end
+
     if has_values(m)
         planning_sol = process_planning_sol(m,planning_variables)
         LB = objective_value(m)

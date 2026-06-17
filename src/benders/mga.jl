@@ -1,4 +1,7 @@
 function setup_mga_master_problem!(planning_problem::Model, setup::Dict)
+    if haskey(planning_problem.obj_dict, :cMGABudget)
+        unregister(planning_problem, :cMGABudget)
+    end
     @constraint(planning_problem, cMGABudget, planning_problem[:ePlanningCost] + sum(planning_problem[:vTHETA]) <= setup[:MGABudget])
 end
 
