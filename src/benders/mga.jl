@@ -28,9 +28,14 @@ function make_rand_vecs(nvars::Int64, iterations::Int64)
 end
 
 function make_capmm_vecs(nvars::Int64, iterations::Int64)
-    vecs = unique(rand(-1:1, nvars, ceil(Int64, iterations)), dims=2)[:, 1:ceil(Int64, iterations/2)]
+    # Potential GenX bug: if nvars is small, unique() may return fewer columns than
+    # ceil(iterations/2) since there are only 3^nvars possible {-1,0,1} vectors.
+    # Fix: clamp the column slice to however many unique columns actually exist.
+    raw = unique(rand(-1:1, nvars, ceil(Int64, iterations)), dims=2)
+    half = min(ceil(Int64, iterations/2), size(raw, 2))
+    vecs = raw[:, 1:half]
     vecs = hcat(vecs, -vecs)
-    vecs = vecs[:, 1:iterations]
+    vecs = vecs[:, 1:min(iterations, size(vecs, 2))]
     return vecs
 end
 
@@ -224,12 +229,15 @@ function mga_cutting_plane(planning_problem::Model, subproblems, linking_variabl
         if within_budget || within_relaxed_budget
             if indicator == 0
                 @info("Rerunning with crossover on")
-                set_attribute(planning_problem, "Crossover", 1)
+                # Try both Gurobi and HiGHS attribute names — one will succeed, other silently fails
+                try; set_attribute(planning_problem, "Crossover", 1);      catch; end
+                try; set_attribute(planning_problem, "run_crossover", "on"); catch; end
                 TrueSystemCost = Inf
                 TrueSystemCost_new = Inf
                 indicator = 1
             else
-                set_attribute(planning_problem, "Crossover", 0)
+                try; set_attribute(planning_problem, "Crossover", 0);       catch; end
+                try; set_attribute(planning_problem, "run_crossover", "off"); catch; end
                 total_master_time = sum(master_times)
                 total_sub_time = sum(sub_times)
                 @info("MGA iteration $mga_it finished. Total planning time = $(tidy_timing(total_master_time)), Total subproblem time = $(tidy_timing(total_sub_time))")
@@ -252,7 +260,7 @@ function mga_cutting_plane(planning_problem::Model, subproblems, linking_variabl
     return (planning_problem=planning_problem, planning_sol=planning_sol_final, subop_sol=subop_sol, ApproxSystemCost_hist=ApproxSystemCost_hist, TrueSystemCost_hist=TrueSystemCost_hist, cpu_time=cpu_time)
 end
 
-function benders_mga(planning_problem::Model, subproblems::Union{Vector{Dict{Any,Any}}, DistributedArrays.DArray}, linking_variables_sub::Dict, setup::Dict, benders_result::NamedTuple, variables::Vector{String})
+function benders_mga(planning_problem::Model, subproblems::Union{Vector{Dict{Any,Any}}, DistributedArrays.DArray}, linking_variables_sub::Dict, setup::Dict, benders_result, variables::Vector{String})
     # Required setup keys (in addition to existing Benders keys):
     #   :MGASlack              — budget slack fraction e.g. 0.05 for 5% above optimal
     #   :MGAIterations         — number of MGA iterations to run
