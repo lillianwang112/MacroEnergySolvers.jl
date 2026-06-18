@@ -21,36 +21,47 @@ and the problem will be re-solved. If the solution fails, the function will comp
 and display conflicting constraints (if the solver supports it) before throwing an error.
 """
 function solve_planning_problem(m::Model,planning_variables::Vector{String})
-	
-	
+
     optimize!(m)
 
     if !has_values(m)
         # Barrier with Crossover=0 can return INFEASIBLE_OR_UNBOUNDED when the problem
         # is actually feasible but numerically ambiguous. Retry with crossover enabled.
-        @info "Planning solve did not return values (status: $(termination_status(m))). Retrying with crossover enabled."
-        try; set_attribute(m, "Crossover", 1);       catch; end
+        status1 = termination_status(m)
+        @info "Planning solve did not return values (status: $status1). Retrying with crossover enabled."
+        try; set_attribute(m, "Crossover", 1);        catch; end
         try; set_attribute(m, "run_crossover", "on"); catch; end
         optimize!(m)
-        try; set_attribute(m, "Crossover", 0);        catch; end
-        try; set_attribute(m, "run_crossover", "off"); catch; end
-    end
-
-    if has_values(m)
-        planning_sol = process_planning_sol(m,planning_variables)
-        LB = objective_value(m)
-    else
-        compute_conflict!(m)
-        list_of_conflicting_constraints = ConstraintRef[];
-        for (F, S) in list_of_constraint_types(m)
-            for con in all_constraints(m, F, S)
-                if get_attribute(con, MOI.ConstraintConflictStatus()) == MOI.IN_CONFLICT
-                    push!(list_of_conflicting_constraints, con)
-                end
-            end
+        # Capture status and values BEFORE resetting crossover — set_attribute invalidates solution state
+        if has_values(m)
+            planning_sol = process_planning_sol(m, planning_variables)
+            LB = objective_value(m)
+        else
+            status2 = termination_status(m)
         end
-        display(list_of_conflicting_constraints)
-        @error "The planning solution failed. This should not happen."
+        try; set_attribute(m, "Crossover", 0);         catch; end
+        try; set_attribute(m, "run_crossover", "off"); catch; end
+
+        if !@isdefined(planning_sol)
+            # Barrier failed even with crossover — fall back to dual simplex
+            @info "Crossover retry failed (status: $status2). Retrying with dual simplex (Method=1)."
+            try; set_attribute(m, "Method", 1); catch; end
+            optimize!(m)
+            if has_values(m)
+                planning_sol = process_planning_sol(m, planning_variables)
+                LB = objective_value(m)
+            else
+                status3 = termination_status(m)
+            end
+            try; set_attribute(m, "Method", 2); catch; end
+        end
+
+        if !@isdefined(planning_sol)
+            error("Planning solve failed with all methods (barrier: $status1, crossover: $status2, simplex: $status3).")
+        end
+    else
+        planning_sol = process_planning_sol(m, planning_variables)
+        LB = objective_value(m)
     end
 
     return planning_sol, LB

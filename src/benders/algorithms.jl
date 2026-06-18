@@ -133,7 +133,7 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 		@info("Updating the planning problem....")
 		time_start_update = time()
 
-		update_planning_problem_multi_cuts!(planning_problem,subop_sol,planning_sol,linking_variables_sub)
+		update_planning_problem_multi_cuts!(planning_problem,subop_sol,planning_sol,linking_variables_sub,k)
 
 		time_planning_update = time()-time_start_update
 		@info("Done updating the planning problem. It took $(tidy_timing(time_planning_update)) seconds).")
@@ -239,11 +239,11 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 	
 end
 
-function update_planning_problem_multi_cuts!(m::Model,subop_sol::Dict,planning_sol::NamedTuple,linking_variables_sub::Dict)
-    
+function update_planning_problem_multi_cuts!(m::Model,subop_sol::Dict,planning_sol::NamedTuple,linking_variables_sub::Dict,k::Int64)
+
 	W = keys(subop_sol);
-	
-    @constraint(m,[w in W],subop_sol[w].theta_coeff*m[:vTHETA][w] >= subop_sol[w].op_cost + sum(subop_sol[w].lambda[i]*(variable_by_name(m,linking_variables_sub[w][i]) - planning_sol.values[linking_variables_sub[w][i]]) for i in 1:length(linking_variables_sub[w])));
+
+    @constraint(m,[w in W],subop_sol[w].theta_coeff*m[:vTHETA][w] >= subop_sol[w].op_cost + sum(subop_sol[w].lambda[i]*(variable_by_name(m,linking_variables_sub[w][i]) - planning_sol.values[linking_variables_sub[w][i]]) for i in 1:length(linking_variables_sub[w])), base_name="BendersCut_0_"*string(k));
 
 end
 

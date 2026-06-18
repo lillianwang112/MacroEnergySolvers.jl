@@ -104,68 +104,122 @@ function reorder_vecs(vecs::AbstractArray, setup::Dict)
 end
 
 function retain_fixed_spcuts_early(planning_problem::Model, num_cuts::Int64, iterations::Int64)
-    cut_names = Vector{String}(undef, 0)
+    # num_cuts: max number of complete (mga_it, benders_it) groups to retain.
+    # Truncating by scalar cuts instead of complete groups breaks vTHETA lower bounds
+    # for excluded subproblems, making the LP unbounded for the MGA objective.
     cuts_by_iteration = Dict{Int64, Vector{String}}()
     for i in 0:iterations
-        cuts_by_iteration[i] = Vector{String}(undef, 0)
+        cuts_by_iteration[i] = String[]
     end
 
-    struc_names = Vector{String}(undef, 0)
+    struc_names = String[]
     for con in all_constraints(planning_problem, include_variable_in_set_constraints=false)
-        if occursin("BendersCut", name(con))
-            split_name = split(name(con), "_")
-            push!(cuts_by_iteration[parse(Int, split_name[2])], name(con))
+        n = name(con)
+        if occursin("BendersCut", n)
+            parts = split(n, "_")
+            mga_it = parse(Int, parts[2])
+            haskey(cuts_by_iteration, mga_it) && push!(cuts_by_iteration[mga_it], n)
         else
-            push!(struc_names, name(con))
+            push!(struc_names, n)
         end
     end
 
+    cut_names = String[]
     for i in 0:iterations
-        cut_names = vcat(cut_names, cuts_by_iteration[i])
+        append!(cut_names, cuts_by_iteration[i])
     end
-    cut_names = cut_names[1:min(num_cuts, length(cut_names))]
-    return vcat(struc_names, cut_names)
+
+    # Group by complete (mga_it, benders_it) pairs and keep the first num_cuts groups.
+    benders_groups = Dict{Tuple{Int64,Int64}, Vector{String}}()
+    group_order = Tuple{Int64,Int64}[]
+    for n in cut_names
+        parts = split(n, "_")
+        mga_it = parse(Int, parts[2])
+        benders_it = parse(Int, split(parts[3], "[")[1])
+        key = (mga_it, benders_it)
+        if !haskey(benders_groups, key)
+            push!(group_order, key)
+            benders_groups[key] = String[]
+        end
+        push!(benders_groups[key], n)
+    end
+
+    kept = String[]
+    for key in group_order[1:min(num_cuts, length(group_order))]
+        append!(kept, benders_groups[key])
+    end
+    return vcat(struc_names, kept)
 end
 
 function retain_early_cuts_latest_iterations(planning_problem::Model, num_cuts::Int64, iteration::Int64)
+    # num_cuts: max number of complete (mga_it, benders_it) groups to retain.
+    # Strategy: keep ~1/4 of mga_it=0 groups (early) + fill from most recent MGA iterations.
     cuts_by_iteration = Dict{Int64, Vector{String}}()
-    struc_names = Vector{String}(undef, 0)
     for i in 0:iteration
-        cuts_by_iteration[i] = Vector{String}(undef, 0)
+        cuts_by_iteration[i] = String[]
     end
+    struc_names = String[]
 
     for con in all_constraints(planning_problem, include_variable_in_set_constraints=false)
-        if occursin("BendersCut", name(con))
-            split_name = split(name(con), "_")
-            push!(cuts_by_iteration[parse(Int, split_name[2])], name(con))
+        n = name(con)
+        if occursin("BendersCut", n)
+            parts = split(n, "_")
+            mga_it = parse(Int, parts[2])
+            haskey(cuts_by_iteration, mga_it) && push!(cuts_by_iteration[mga_it], n)
         else
-            push!(struc_names, name(con))
+            push!(struc_names, n)
         end
     end
 
-    cuts_saved_per_it = ceil(Int64, length(cuts_by_iteration[0])/4)
+    # Group cuts by complete (mga_it, benders_it) pairs for iteration-safe truncation.
+    function benders_groups(names::Vector{String})
+        groups = Dict{Int64, Vector{String}}()
+        order = Int64[]
+        for n in names
+            parts = split(n, "_")
+            b = parse(Int, split(parts[3], "[")[1])
+            if !haskey(groups, b)
+                push!(order, b)
+                groups[b] = String[]
+            end
+            push!(groups[b], n)
+        end
+        return [(b, groups[b]) for b in sort(order)]
+    end
 
-    if sum(length.(values(cuts_by_iteration))) >= num_cuts
-        cut_names = cuts_by_iteration[0][1:min(cuts_saved_per_it, length(cuts_by_iteration[0]))]
+    early = benders_groups(cuts_by_iteration[0])
+    n_early = length(early)
+    groups_per_it = ceil(Int64, n_early / 4)
+
+    total_groups = sum(length(benders_groups(cuts_by_iteration[i])) for i in 0:iteration)
+
+    cut_names = String[]
+    if total_groups < num_cuts
+        # Under budget: keep all cuts from all iterations
+        for i in 0:iteration
+            for (_, g) in benders_groups(cuts_by_iteration[i])
+                append!(cut_names, g)
+            end
+        end
     else
-        cut_names = cuts_by_iteration[0]
+        # Over budget: seed with first groups_per_it complete groups from mga_it=0,
+        # then fill from most recent MGA iterations down.
+        groups_kept = 0
+        for (_, g) in early[1:min(groups_per_it, n_early)]
+            append!(cut_names, g)
+            groups_kept += 1
+        end
+        for i in iteration:-1:1
+            groups_kept >= num_cuts && break
+            for (_, g) in benders_groups(cuts_by_iteration[i])[1:min(groups_per_it, length(benders_groups(cuts_by_iteration[i])))]
+                groups_kept >= num_cuts && break
+                append!(cut_names, g)
+                groups_kept += 1
+            end
+        end
     end
 
-    for i in length(keys(cuts_by_iteration))-1:-1:1
-        if length(cut_names) >= num_cuts
-            cut_names = cut_names[1:num_cuts]
-            break
-        end
-        if sum(length.(values(cuts_by_iteration))) >= num_cuts
-            cut_names = vcat(cut_names, cuts_by_iteration[i][1:min(cuts_saved_per_it, length(cuts_by_iteration[i]))])
-        else
-            cut_names = vcat(cut_names, cuts_by_iteration[i])
-        end
-    end
-
-    new_master_cons = struc_names
-    append!(new_master_cons, cut_names)
-    return new_master_cons
+    return vcat(struc_names, cut_names)
 end
 
 function update_planning_problem_multi_cuts_mga!(planning_problem::Model, subop_sol::Dict, planning_sol::NamedTuple, linking_vars_sub::Dict, mga_it::Int64, benders_it::Int64)
@@ -277,7 +331,6 @@ function benders_mga(planning_problem::Model, subproblems::Union{Vector{Dict{Any
     setup[:MGABudget] = benders_result.UB_hist[end] * (1 + setup[:MGASlack])
 
     setup_mga_master_problem!(planning_problem, setup)
-    name_cuts!(planning_problem, 0)
 
     opt_cuts = name.(all_constraints(planning_problem, include_variable_in_set_constraints=false))
 
