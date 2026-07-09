@@ -110,8 +110,14 @@ function solve_subproblem(m::Model,planning_sol::NamedTuple,linking_variables_su
         unfix.(m[:slack_max]);
         objfun = objective_function(m);
         @objective(m, Min, m[:slack_max])
-        
+
+        try; set_attribute(m, "Crossover", 0); catch; end
         optimize!(m)
+        if !has_values(m)
+            # Barrier without crossover failed to converge; retry with crossover
+            try; set_attribute(m, "Crossover", 1); catch; end
+            optimize!(m)
+        end
         if !has_values(m)
             compute_conflict!(m)
             list_of_conflicting_constraints = ConstraintRef[];
@@ -127,8 +133,9 @@ function solve_subproblem(m::Model,planning_sol::NamedTuple,linking_variables_su
         end
         op_cost = objective_value(m);
         lambda = [dual(FixRef(variable_by_name(m,y))) for y in linking_variables_sub];
-		theta_coeff = 0;	
+		theta_coeff = 0;
 
+        try; set_attribute(m, "Crossover", 1); catch; end
         fix.(m[:slack_max],0.0);
 
         @objective(m, Min, objfun)
