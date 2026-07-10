@@ -55,6 +55,8 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 	@info("Running Benders decomposition algorithm from `MacroEnergySolvers.jl`")
 	
 	expect_feasible_subproblems = setup[:ExpectFeasibleSubproblems];
+	elastic_slack = get(setup, :ElasticSlack, false);
+	elastic_slack && @info("ElasticSlack=true: subproblem slack variables always unfixed; subproblems always feasible (optimality cuts only).")
 
 	if expect_feasible_subproblems == true
 		@info("Feasibility cuts will not be computed because ExpectFeasibleSubproblems is set to true.")
@@ -144,7 +146,7 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 
 		planning_sol_hist = hcat(planning_sol_hist, [planning_sol.values[s] for s in planning_variables])
 		
-        subop_sol = solve_subproblems(subproblems,planning_sol,expect_feasible_subproblems);
+        subop_sol = solve_subproblems(subproblems,planning_sol,expect_feasible_subproblems,elastic_slack);
         
 		cpu_subop_sol = time()-start_subop_sol;
 		@info("Solving the subproblems required $(tidy_timing(cpu_subop_sol)) seconds")
