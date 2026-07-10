@@ -141,6 +141,7 @@ function solve_subproblem(m::Model,planning_sol::NamedTuple,linking_variables_su
             physical_farkas = sum(
                 dual(con) * normalized_rhs(con)
                 for (F, S) in list_of_constraint_types(m, include_variable_in_set_constraints=false)
+                if F == AffExpr
                 for con in all_constraints(m, F, S)
             )
             linking_farkas = sum(lambda[i] * planning_sol.values[linking_variables_sub[i]] for i in 1:length(linking_variables_sub))
