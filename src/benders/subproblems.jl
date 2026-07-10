@@ -139,7 +139,8 @@ function solve_subproblem(m::Model,planning_sol::NamedTuple,linking_variables_su
         if use_farkas
             lambda = [dual(FixRef(variable_by_name(m,y))) for y in linking_variables_sub];
             physical_farkas = 0.0
-            for (F, S) in list_of_constraint_types(m, include_variable_in_set_constraints=false)
+            for (F, S) in list_of_constraint_types(m)
+                F <: JuMP.AbstractVariableRef && continue  # skip variable bounds/fixes (handled via linking_farkas; including them would double-count)
                 for con in all_constraints(m, F, S)
                     if F <: JuMP.AbstractJuMPScalar
                         # Scalar affine constraint: normalized_rhs gives the RHS directly
