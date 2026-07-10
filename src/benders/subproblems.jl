@@ -132,16 +132,17 @@ function solve_subproblem(m::Model,planning_sol::NamedTuple,linking_variables_su
 		op_cost = objective_value(m);
 		lambda = [dual(FixRef(variable_by_name(m,y))) for y in linking_variables_sub];
 		theta_coeff = 1;
+        lmax = isempty(lambda) ? 0.0 : maximum(abs.(lambda))
         if elastic_slack
             slack_val = value(m[:slack_max])
             if slack_val > 1e-6
-                @info "Subproblem elastic (slack=$(round(slack_val, sigdigits=4))): op_cost=$(round(op_cost, sigdigits=4)), lambda_norm=$(round(norm(lambda), sigdigits=4)), lambda_max=$(round(maximum(abs.(lambda)), sigdigits=4))"
+                @info "Subproblem elastic (slack=$(round(slack_val, sigdigits=4))): op_cost=$(round(op_cost, sigdigits=4)), lambda_norm=$(round(norm(lambda), sigdigits=4)), lambda_max=$(round(lmax, sigdigits=4))"
             else
-                @info "Subproblem feasible (slack=0): op_cost=$(round(op_cost, sigdigits=4)), lambda_norm=$(round(norm(lambda), sigdigits=4)), lambda_max=$(round(maximum(abs.(lambda)), sigdigits=4))"
+                @info "Subproblem feasible (slack=0): op_cost=$(round(op_cost, sigdigits=4)), lambda_norm=$(round(norm(lambda), sigdigits=4)), lambda_max=$(round(lmax, sigdigits=4))"
             end
             fix.(m[:slack_max], 0.0)  # re-fix for next iteration
         else
-            @info "Subproblem feasible: op_cost=$(round(op_cost, sigdigits=4)), status=$(termination_status(m)), lambda_norm=$(round(norm(lambda), sigdigits=4)), lambda_max=$(round(maximum(abs.(lambda)), sigdigits=4))"
+            @info "Subproblem feasible: op_cost=$(round(op_cost, sigdigits=4)), status=$(termination_status(m)), lambda_norm=$(round(norm(lambda), sigdigits=4)), lambda_max=$(round(lmax, sigdigits=4)), n_nonzero=$(sum(abs.(lambda) .> 1e-8))/$(length(lambda))"
         end
     elseif expect_feasible_subproblems==true
         compute_conflict!(m)
