@@ -100,14 +100,20 @@ function fix_linking_variables!(m::Model,planning_sol::NamedTuple,linking_variab
 	end
 end
 
-function solve_subproblem(m::Model,planning_sol::NamedTuple,linking_variables_sub::Vector{String},expect_feasible_subproblems::Bool)
+function solve_subproblem(m::Model,planning_sol::NamedTuple,linking_variables_sub::Vector{String},expect_feasible_subproblems::Bool,elastic_slack::Bool=false)
 
     ### Solve the operational subproblem. If it is infeasible, compute feasibility cuts.
 
 	fix_linking_variables!(m,planning_sol,linking_variables_sub)
 
-    # Enable Farkas dual extraction on infeasible solves
-    try; set_attribute(m, "InfUnbdInfo", 1); catch; end
+    if elastic_slack
+        # Always unfix slack before solving: subproblem is always feasible via slack absorption.
+        # Slack penalty (baked into eVariableCost at model construction) drives master to invest.
+        unfix.(m[:slack_max])
+    else
+        # Enable Farkas dual extraction on infeasible solves
+        try; set_attribute(m, "InfUnbdInfo", 1); catch; end
+    end
 
 	optimize!(m)
 
@@ -115,7 +121,17 @@ function solve_subproblem(m::Model,planning_sol::NamedTuple,linking_variables_su
 		op_cost = objective_value(m);
 		lambda = [dual(FixRef(variable_by_name(m,y))) for y in linking_variables_sub];
 		theta_coeff = 1;
-		@info "Subproblem feasible: op_cost=$(round(op_cost, sigdigits=4)), status=$(termination_status(m)), lambda_norm=$(round(norm(lambda), sigdigits=4)), lambda_max=$(round(maximum(abs.(lambda)), sigdigits=4))"
+        if elastic_slack
+            slack_val = value(m[:slack_max])
+            if slack_val > 1e-6
+                @info "Subproblem elastic (slack=$(round(slack_val, sigdigits=4))): op_cost=$(round(op_cost, sigdigits=4)), lambda_norm=$(round(norm(lambda), sigdigits=4)), lambda_max=$(round(maximum(abs.(lambda)), sigdigits=4))"
+            else
+                @info "Subproblem feasible (slack=0): op_cost=$(round(op_cost, sigdigits=4)), lambda_norm=$(round(norm(lambda), sigdigits=4)), lambda_max=$(round(maximum(abs.(lambda)), sigdigits=4))"
+            end
+            fix.(m[:slack_max], 0.0)  # re-fix for next iteration
+        else
+            @info "Subproblem feasible: op_cost=$(round(op_cost, sigdigits=4)), status=$(termination_status(m)), lambda_norm=$(round(norm(lambda), sigdigits=4)), lambda_max=$(round(maximum(abs.(lambda)), sigdigits=4))"
+        end
     elseif expect_feasible_subproblems==true
         compute_conflict!(m)
             list_of_conflicting_constraints = ConstraintRef[];
@@ -236,14 +252,14 @@ function solve_subproblem(m::Model,planning_sol::NamedTuple,linking_variables_su
 end
 
 
-function solve_local_subproblems(subproblem_local::Vector{Dict{Any,Any}},planning_sol::NamedTuple, expect_feasible_subproblems::Bool)
+function solve_local_subproblems(subproblem_local::Vector{Dict{Any,Any}},planning_sol::NamedTuple, expect_feasible_subproblems::Bool, elastic_slack::Bool=false)
 
     local_sol=Dict();
     for sp in subproblem_local
         m = sp[:model];
         linking_variables_sub = sp[:linking_variables_sub]
         w = sp[:subproblem_index];
-		local_sol[w] = solve_subproblem(m,planning_sol,linking_variables_sub,expect_feasible_subproblems);
+		local_sol[w] = solve_subproblem(m,planning_sol,linking_variables_sub,expect_feasible_subproblems,elastic_slack);
     end
     return local_sol
 end
@@ -276,7 +292,7 @@ A merged dictionary containing results from all subproblems, where each entry co
 Uses `@sync` and `@async` for coordinated parallel execution, with results fetched from each worker
 and merged into a single dictionary containing all subproblem solutions.
 """
-function solve_subproblems(m_subproblems::DArray{Dict{Any, Any}, 1, Vector{Dict{Any, Any}}},planning_sol::NamedTuple,expect_feasible_subproblems::Bool)
+function solve_subproblems(m_subproblems::DArray{Dict{Any, Any}, 1, Vector{Dict{Any, Any}}},planning_sol::NamedTuple,expect_feasible_subproblems::Bool,elastic_slack::Bool=false)
 
     p_id = workers();
     np_id = length(p_id);
@@ -284,7 +300,7 @@ function solve_subproblems(m_subproblems::DArray{Dict{Any, Any}, 1, Vector{Dict{
     sub_results = [Dict() for k in 1:np_id];
 
     @sync for k in 1:np_id
-              @async sub_results[k]= @fetchfrom p_id[k] solve_local_subproblems(localpart(m_subproblems),planning_sol,expect_feasible_subproblems); ### This is equivalent to fetch(@spawnat p .....)
+              @async sub_results[k]= @fetchfrom p_id[k] solve_local_subproblems(localpart(m_subproblems),planning_sol,expect_feasible_subproblems,elastic_slack); ### This is equivalent to fetch(@spawnat p .....)
     end
 
 	sub_results = merge(sub_results...);
@@ -293,9 +309,9 @@ function solve_subproblems(m_subproblems::DArray{Dict{Any, Any}, 1, Vector{Dict{
 end
 
 
-function solve_subproblems(m_subproblems::Vector{Dict{Any, Any}},planning_sol::NamedTuple,expect_feasible_subproblems::Bool)
-    
-    sub_results = solve_local_subproblems(m_subproblems,planning_sol,expect_feasible_subproblems); 
+function solve_subproblems(m_subproblems::Vector{Dict{Any, Any}},planning_sol::NamedTuple,expect_feasible_subproblems::Bool,elastic_slack::Bool=false)
+
+    sub_results = solve_local_subproblems(m_subproblems,planning_sol,expect_feasible_subproblems,elastic_slack);
 
     return sub_results
 end
