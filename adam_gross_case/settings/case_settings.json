@@ -1,0 +1,4 @@
+{
+    "SolutionAlgorithm": "Benders",
+    "PeriodLengths": [5,10,10]
+}
