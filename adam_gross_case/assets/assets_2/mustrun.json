@@ -1,0 +1,1957 @@
+{
+    "MustRun": {
+        "global_data": {
+            "transforms": {
+                "timedata": "Electricity"
+            },
+            "edges": {
+                "elec_edge": {
+                    "unidirectional": true,
+                    "has_capacity": true,
+                    "commodity": "Electricity"
+                }
+            }
+        },
+        "instance_data": [
+            {
+                "id": "CO1_biomass_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 0,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 101142,
+                        "end_vertex": "elec_CO1",
+                        "variable_om_cost": 3.86,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": [
+                            1
+                        ],
+                        "existing_capacity": 23.9
+                    }
+                }
+            },
+            {
+                "id": "CO1_run_of_river_hydroelectric_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 3.9,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 11113,
+                        "end_vertex": "elec_CO1",
+                        "variable_om_cost": 0,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": {
+                            "timeseries": {
+                                "header": "CO1_run_of_river_hydroelectric_1",
+                                "path": "system/mustrun_availability_2.csv"
+                            }
+                        },
+                        "existing_capacity": 200.8
+                    }
+                }
+            },
+            {
+                "id": "FL1_biomass_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 0,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 39994,
+                        "end_vertex": "elec_FL1",
+                        "variable_om_cost": 2.21,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": [
+                            1
+                        ],
+                        "existing_capacity": 495.1
+                    }
+                }
+            },
+            {
+                "id": "GC1_biomass_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 0,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 10167,
+                        "end_vertex": "elec_GC1",
+                        "variable_om_cost": 3.14,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": [
+                            1
+                        ],
+                        "existing_capacity": 4.4
+                    }
+                }
+            },
+            {
+                "id": "GC1_run_of_river_hydroelectric_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 6,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 8781,
+                        "end_vertex": "elec_GC1",
+                        "variable_om_cost": 0,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": {
+                            "timeseries": {
+                                "header": "GC1_run_of_river_hydroelectric_1",
+                                "path": "system/mustrun_availability_2.csv"
+                            }
+                        },
+                        "existing_capacity": 30.5
+                    }
+                }
+            },
+            {
+                "id": "GC3_biomass_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 0,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 61739,
+                        "end_vertex": "elec_GC3",
+                        "variable_om_cost": 3.1,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": [
+                            1
+                        ],
+                        "existing_capacity": 149.9
+                    }
+                }
+            },
+            {
+                "id": "GC3_run_of_river_hydroelectric_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 0,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 9418,
+                        "end_vertex": "elec_GC3",
+                        "variable_om_cost": 0,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": {
+                            "timeseries": {
+                                "header": "GC3_run_of_river_hydroelectric_1",
+                                "path": "system/mustrun_availability_2.csv"
+                            }
+                        },
+                        "existing_capacity": 112.3
+                    }
+                }
+            },
+            {
+                "id": "GC4_biomass_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 0,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 123692,
+                        "end_vertex": "elec_GC4",
+                        "variable_om_cost": 5.48,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": [
+                            1
+                        ],
+                        "existing_capacity": 0
+                    }
+                }
+            },
+            {
+                "id": "GC4_run_of_river_hydroelectric_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 0,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 9325,
+                        "end_vertex": "elec_GC4",
+                        "variable_om_cost": 0,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": {
+                            "timeseries": {
+                                "header": "GC4_run_of_river_hydroelectric_1",
+                                "path": "system/mustrun_availability_2.csv"
+                            }
+                        },
+                        "existing_capacity": 192
+                    }
+                }
+            },
+            {
+                "id": "ID1_biomass_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 0,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 125314,
+                        "end_vertex": "elec_ID1",
+                        "variable_om_cost": 3.19,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": [
+                            1
+                        ],
+                        "existing_capacity": 13.2
+                    }
+                }
+            },
+            {
+                "id": "ID1_geothermal_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 10,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 56551,
+                        "end_vertex": "elec_ID1",
+                        "variable_om_cost": 0.59,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": [
+                            1
+                        ],
+                        "existing_capacity": 0
+                    }
+                }
+            },
+            {
+                "id": "ID1_run_of_river_hydroelectric_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 32.9,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 8995,
+                        "end_vertex": "elec_ID1",
+                        "variable_om_cost": 0,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": {
+                            "timeseries": {
+                                "header": "ID1_run_of_river_hydroelectric_1",
+                                "path": "system/mustrun_availability_2.csv"
+                            }
+                        },
+                        "existing_capacity": 731.8
+                    }
+                }
+            },
+            {
+                "id": "KY1_biomass_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 0,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 242974,
+                        "end_vertex": "elec_KY1",
+                        "variable_om_cost": 5.52,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": [
+                            1
+                        ],
+                        "existing_capacity": 18.2
+                    }
+                }
+            },
+            {
+                "id": "KY1_run_of_river_hydroelectric_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 0,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 7688,
+                        "end_vertex": "elec_KY1",
+                        "variable_om_cost": 0,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": {
+                            "timeseries": {
+                                "header": "KY1_run_of_river_hydroelectric_1",
+                                "path": "system/mustrun_availability_2.csv"
+                            }
+                        },
+                        "existing_capacity": 855.6
+                    }
+                }
+            },
+            {
+                "id": "MT1_biomass_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 0,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 10167,
+                        "end_vertex": "elec_MT1",
+                        "variable_om_cost": 3.14,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": [
+                            1
+                        ],
+                        "existing_capacity": 3.2
+                    }
+                }
+            },
+            {
+                "id": "MT1_run_of_river_hydroelectric_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 70.6,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 9035,
+                        "end_vertex": "elec_MT1",
+                        "variable_om_cost": 0,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": {
+                            "timeseries": {
+                                "header": "MT1_run_of_river_hydroelectric_1",
+                                "path": "system/mustrun_availability_2.csv"
+                            }
+                        },
+                        "existing_capacity": 255.7
+                    }
+                }
+            },
+            {
+                "id": "NE1_biomass_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 0,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 145891,
+                        "end_vertex": "elec_NE1",
+                        "variable_om_cost": 3.98,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": [
+                            1
+                        ],
+                        "existing_capacity": 10.3
+                    }
+                }
+            },
+            {
+                "id": "NE1_run_of_river_hydroelectric_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 69,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 8485,
+                        "end_vertex": "elec_NE1",
+                        "variable_om_cost": 0,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": {
+                            "timeseries": {
+                                "header": "NE1_run_of_river_hydroelectric_1",
+                                "path": "system/mustrun_availability_2.csv"
+                            }
+                        },
+                        "existing_capacity": 206.6
+                    }
+                }
+            },
+            {
+                "id": "OK1_biomass_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 0,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 10167,
+                        "end_vertex": "elec_OK1",
+                        "variable_om_cost": 3.14,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": [
+                            1
+                        ],
+                        "existing_capacity": 2.8
+                    }
+                }
+            },
+            {
+                "id": "OK1_run_of_river_hydroelectric_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 0,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 8880,
+                        "end_vertex": "elec_OK1",
+                        "variable_om_cost": 0,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": {
+                            "timeseries": {
+                                "header": "OK1_run_of_river_hydroelectric_1",
+                                "path": "system/mustrun_availability_2.csv"
+                            }
+                        },
+                        "existing_capacity": 341.4
+                    }
+                }
+            },
+            {
+                "id": "TX2_biomass_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 0,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 63305,
+                        "end_vertex": "elec_TX2",
+                        "variable_om_cost": 2.38,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": [
+                            1
+                        ],
+                        "existing_capacity": 18.6
+                    }
+                }
+            },
+            {
+                "id": "TX2_run_of_river_hydroelectric_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 74.6,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 6979,
+                        "end_vertex": "elec_TX2",
+                        "variable_om_cost": 0,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": {
+                            "timeseries": {
+                                "header": "TX2_run_of_river_hydroelectric_1",
+                                "path": "system/mustrun_availability_2.csv"
+                            }
+                        },
+                        "existing_capacity": 285.9
+                    }
+                }
+            },
+            {
+                "id": "WY1_run_of_river_hydroelectric_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 1,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 11655,
+                        "end_vertex": "elec_WY1",
+                        "variable_om_cost": 0,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": {
+                            "timeseries": {
+                                "header": "WY1_run_of_river_hydroelectric_1",
+                                "path": "system/mustrun_availability_2.csv"
+                            }
+                        },
+                        "existing_capacity": 20.5
+                    }
+                }
+            },
+            {
+                "id": "eastern0_biomass_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 62.2,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 99840,
+                        "end_vertex": "elec_eastern0",
+                        "variable_om_cost": 3.68,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": [
+                            1
+                        ],
+                        "existing_capacity": 861.5
+                    }
+                }
+            },
+            {
+                "id": "eastern0_run_of_river_hydroelectric_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 372.3,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 8594,
+                        "end_vertex": "elec_eastern0",
+                        "variable_om_cost": 0,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": {
+                            "timeseries": {
+                                "header": "eastern0_run_of_river_hydroelectric_1",
+                                "path": "system/mustrun_availability_2.csv"
+                            }
+                        },
+                        "existing_capacity": 3792.7
+                    }
+                }
+            },
+            {
+                "id": "eastern2_biomass_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 0,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 119027,
+                        "end_vertex": "elec_eastern2",
+                        "variable_om_cost": 3.97,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": [
+                            1
+                        ],
+                        "existing_capacity": 223.6
+                    }
+                }
+            },
+            {
+                "id": "eastern2_run_of_river_hydroelectric_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 49.7,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 12476,
+                        "end_vertex": "elec_eastern2",
+                        "variable_om_cost": 0,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": {
+                            "timeseries": {
+                                "header": "eastern2_run_of_river_hydroelectric_1",
+                                "path": "system/mustrun_availability_2.csv"
+                            }
+                        },
+                        "existing_capacity": 273
+                    }
+                }
+            },
+            {
+                "id": "eastern3_biomass_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 0,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 125118,
+                        "end_vertex": "elec_eastern3",
+                        "variable_om_cost": 3.02,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": [
+                            1
+                        ],
+                        "existing_capacity": 19.1
+                    }
+                }
+            },
+            {
+                "id": "eastern3_run_of_river_hydroelectric_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 0,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 8508,
+                        "end_vertex": "elec_eastern3",
+                        "variable_om_cost": 0,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": {
+                            "timeseries": {
+                                "header": "eastern3_run_of_river_hydroelectric_1",
+                                "path": "system/mustrun_availability_2.csv"
+                            }
+                        },
+                        "existing_capacity": 797
+                    }
+                }
+            },
+            {
+                "id": "eastern4_biomass_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 47,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 76873,
+                        "end_vertex": "elec_eastern4",
+                        "variable_om_cost": 3.46,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": [
+                            1
+                        ],
+                        "existing_capacity": 473.9
+                    }
+                }
+            },
+            {
+                "id": "eastern4_run_of_river_hydroelectric_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 84.7,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 7848,
+                        "end_vertex": "elec_eastern4",
+                        "variable_om_cost": 0,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": {
+                            "timeseries": {
+                                "header": "eastern4_run_of_river_hydroelectric_1",
+                                "path": "system/mustrun_availability_2.csv"
+                            }
+                        },
+                        "existing_capacity": 3325.8
+                    }
+                }
+            },
+            {
+                "id": "eastern5_biomass_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 107.935,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 89857,
+                        "end_vertex": "elec_eastern5",
+                        "variable_om_cost": 2.99,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": [
+                            1
+                        ],
+                        "existing_capacity": 289.2
+                    }
+                }
+            },
+            {
+                "id": "eastern5_run_of_river_hydroelectric_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 36.8,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 12601,
+                        "end_vertex": "elec_eastern5",
+                        "variable_om_cost": 0,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": {
+                            "timeseries": {
+                                "header": "eastern5_run_of_river_hydroelectric_1",
+                                "path": "system/mustrun_availability_2.csv"
+                            }
+                        },
+                        "existing_capacity": 177.5
+                    }
+                }
+            },
+            {
+                "id": "eastern6_biomass_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 328.7,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 68826,
+                        "end_vertex": "elec_eastern6",
+                        "variable_om_cost": 2.41,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": [
+                            1
+                        ],
+                        "existing_capacity": 434.6
+                    }
+                }
+            },
+            {
+                "id": "eastern6_run_of_river_hydroelectric_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 62.2,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 11542,
+                        "end_vertex": "elec_eastern6",
+                        "variable_om_cost": 0,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": {
+                            "timeseries": {
+                                "header": "eastern6_run_of_river_hydroelectric_1",
+                                "path": "system/mustrun_availability_2.csv"
+                            }
+                        },
+                        "existing_capacity": 755.5
+                    }
+                }
+            },
+            {
+                "id": "western1_biomass_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 15.3,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 122807,
+                        "end_vertex": "elec_western1",
+                        "variable_om_cost": 4.17,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": [
+                            1
+                        ],
+                        "existing_capacity": 86.5
+                    }
+                }
+            },
+            {
+                "id": "western1_geothermal_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 0,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 37995,
+                        "end_vertex": "elec_western1",
+                        "variable_om_cost": 0.59,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": [
+                            1
+                        ],
+                        "existing_capacity": 19.5
+                    }
+                }
+            },
+            {
+                "id": "western1_run_of_river_hydroelectric_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 433.8,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 7690,
+                        "end_vertex": "elec_western1",
+                        "variable_om_cost": 0,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": {
+                            "timeseries": {
+                                "header": "western1_run_of_river_hydroelectric_1",
+                                "path": "system/mustrun_availability_2.csv"
+                            }
+                        },
+                        "existing_capacity": 13942.9
+                    }
+                }
+            },
+            {
+                "id": "western2_biomass_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 401.5,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 97781,
+                        "end_vertex": "elec_western2",
+                        "variable_om_cost": 3.54,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": [
+                            1
+                        ],
+                        "existing_capacity": 280.7
+                    }
+                }
+            },
+            {
+                "id": "western2_geothermal_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 304.3,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 59510,
+                        "end_vertex": "elec_western2",
+                        "variable_om_cost": 0.59,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": [
+                            1
+                        ],
+                        "existing_capacity": 613.5
+                    }
+                }
+            },
+            {
+                "id": "western2_run_of_river_hydroelectric_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 21.7,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 7905,
+                        "end_vertex": "elec_western2",
+                        "variable_om_cost": 0,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": {
+                            "timeseries": {
+                                "header": "western2_run_of_river_hydroelectric_1",
+                                "path": "system/mustrun_availability_2.csv"
+                            }
+                        },
+                        "existing_capacity": 5655.2
+                    }
+                }
+            },
+            {
+                "id": "western3_biomass_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 1.1,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 113308,
+                        "end_vertex": "elec_western3",
+                        "variable_om_cost": 5.69,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": [
+                            1
+                        ],
+                        "existing_capacity": 33.2
+                    }
+                }
+            },
+            {
+                "id": "western3_geothermal_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 0,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 65021,
+                        "end_vertex": "elec_western3",
+                        "variable_om_cost": 0.59,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": [
+                            1
+                        ],
+                        "existing_capacity": 8.6
+                    }
+                }
+            },
+            {
+                "id": "western3_run_of_river_hydroelectric_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 30.9,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 9873,
+                        "end_vertex": "elec_western3",
+                        "variable_om_cost": 0,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": {
+                            "timeseries": {
+                                "header": "western3_run_of_river_hydroelectric_1",
+                                "path": "system/mustrun_availability_2.csv"
+                            }
+                        },
+                        "existing_capacity": 75.7
+                    }
+                }
+            },
+            {
+                "id": "ID1_distributed_generation_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 0,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 0,
+                        "end_vertex": "elec_ID1",
+                        "variable_om_cost": 0,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": {
+                            "timeseries": {
+                                "header": "ID1_distributed_generation_1",
+                                "path": "system/mustrun_availability_2.csv"
+                            }
+                        },
+                        "existing_capacity": 748
+                    }
+                }
+            },
+            {
+                "id": "WY1_distributed_generation_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 0,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 0,
+                        "end_vertex": "elec_WY1",
+                        "variable_om_cost": 0,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": {
+                            "timeseries": {
+                                "header": "WY1_distributed_generation_1",
+                                "path": "system/mustrun_availability_2.csv"
+                            }
+                        },
+                        "existing_capacity": 131
+                    }
+                }
+            },
+            {
+                "id": "MT1_distributed_generation_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 0,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 0,
+                        "end_vertex": "elec_MT1",
+                        "variable_om_cost": 0,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": {
+                            "timeseries": {
+                                "header": "MT1_distributed_generation_1",
+                                "path": "system/mustrun_availability_2.csv"
+                            }
+                        },
+                        "existing_capacity": 52
+                    }
+                }
+            },
+            {
+                "id": "CO1_distributed_generation_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 0,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 0,
+                        "end_vertex": "elec_CO1",
+                        "variable_om_cost": 0,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": {
+                            "timeseries": {
+                                "header": "CO1_distributed_generation_1",
+                                "path": "system/mustrun_availability_2.csv"
+                            }
+                        },
+                        "existing_capacity": 1573
+                    }
+                }
+            },
+            {
+                "id": "NE1_distributed_generation_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 0,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 0,
+                        "end_vertex": "elec_NE1",
+                        "variable_om_cost": 0,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": {
+                            "timeseries": {
+                                "header": "NE1_distributed_generation_1",
+                                "path": "system/mustrun_availability_2.csv"
+                            }
+                        },
+                        "existing_capacity": 90
+                    }
+                }
+            },
+            {
+                "id": "OK1_distributed_generation_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 0,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 0,
+                        "end_vertex": "elec_OK1",
+                        "variable_om_cost": 0,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": {
+                            "timeseries": {
+                                "header": "OK1_distributed_generation_1",
+                                "path": "system/mustrun_availability_2.csv"
+                            }
+                        },
+                        "existing_capacity": 257
+                    }
+                }
+            },
+            {
+                "id": "GC1_distributed_generation_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 0,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 0,
+                        "end_vertex": "elec_GC1",
+                        "variable_om_cost": 0,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": {
+                            "timeseries": {
+                                "header": "GC1_distributed_generation_1",
+                                "path": "system/mustrun_availability_2.csv"
+                            }
+                        },
+                        "existing_capacity": 1054
+                    }
+                }
+            },
+            {
+                "id": "GC2_distributed_generation_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 0,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 0,
+                        "end_vertex": "elec_GC2",
+                        "variable_om_cost": 0,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": {
+                            "timeseries": {
+                                "header": "GC2_distributed_generation_1",
+                                "path": "system/mustrun_availability_2.csv"
+                            }
+                        },
+                        "existing_capacity": 2864
+                    }
+                }
+            },
+            {
+                "id": "GC3_distributed_generation_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 0,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 0,
+                        "end_vertex": "elec_GC3",
+                        "variable_om_cost": 0,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": {
+                            "timeseries": {
+                                "header": "GC3_distributed_generation_1",
+                                "path": "system/mustrun_availability_2.csv"
+                            }
+                        },
+                        "existing_capacity": 103
+                    }
+                }
+            },
+            {
+                "id": "GC4_distributed_generation_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 0,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 0,
+                        "end_vertex": "elec_GC4",
+                        "variable_om_cost": 0,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": {
+                            "timeseries": {
+                                "header": "GC4_distributed_generation_1",
+                                "path": "system/mustrun_availability_2.csv"
+                            }
+                        },
+                        "existing_capacity": 356
+                    }
+                }
+            },
+            {
+                "id": "TX2_distributed_generation_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 0,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 0,
+                        "end_vertex": "elec_TX2",
+                        "variable_om_cost": 0,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": {
+                            "timeseries": {
+                                "header": "TX2_distributed_generation_1",
+                                "path": "system/mustrun_availability_2.csv"
+                            }
+                        },
+                        "existing_capacity": 6299
+                    }
+                }
+            },
+            {
+                "id": "KY1_distributed_generation_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 0,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 0,
+                        "end_vertex": "elec_KY1",
+                        "variable_om_cost": 0,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": {
+                            "timeseries": {
+                                "header": "KY1_distributed_generation_1",
+                                "path": "system/mustrun_availability_2.csv"
+                            }
+                        },
+                        "existing_capacity": 64
+                    }
+                }
+            },
+            {
+                "id": "FL1_distributed_generation_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 0,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 0,
+                        "end_vertex": "elec_FL1",
+                        "variable_om_cost": 0,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": {
+                            "timeseries": {
+                                "header": "FL1_distributed_generation_1",
+                                "path": "system/mustrun_availability_2.csv"
+                            }
+                        },
+                        "existing_capacity": 6757
+                    }
+                }
+            },
+            {
+                "id": "western1_distributed_generation_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 0,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 0,
+                        "end_vertex": "elec_western1",
+                        "variable_om_cost": 0,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": {
+                            "timeseries": {
+                                "header": "western1_distributed_generation_1",
+                                "path": "system/mustrun_availability_2.csv"
+                            }
+                        },
+                        "existing_capacity": 1198
+                    }
+                }
+            },
+            {
+                "id": "western2_distributed_generation_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 0,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 0,
+                        "end_vertex": "elec_western2",
+                        "variable_om_cost": 0,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": {
+                            "timeseries": {
+                                "header": "western2_distributed_generation_1",
+                                "path": "system/mustrun_availability_2.csv"
+                            }
+                        },
+                        "existing_capacity": 17239
+                    }
+                }
+            },
+            {
+                "id": "eastern0_distributed_generation_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 0,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 0,
+                        "end_vertex": "elec_eastern0",
+                        "variable_om_cost": 0,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": {
+                            "timeseries": {
+                                "header": "eastern0_distributed_generation_1",
+                                "path": "system/mustrun_availability_2.csv"
+                            }
+                        },
+                        "existing_capacity": 13625
+                    }
+                }
+            },
+            {
+                "id": "western3_distributed_generation_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 0,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 0,
+                        "end_vertex": "elec_western3",
+                        "variable_om_cost": 0,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": {
+                            "timeseries": {
+                                "header": "western3_distributed_generation_1",
+                                "path": "system/mustrun_availability_2.csv"
+                            }
+                        },
+                        "existing_capacity": 3360
+                    }
+                }
+            },
+            {
+                "id": "eastern1_distributed_generation_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 0,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 0,
+                        "end_vertex": "elec_eastern1",
+                        "variable_om_cost": 0,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": {
+                            "timeseries": {
+                                "header": "eastern1_distributed_generation_1",
+                                "path": "system/mustrun_availability_2.csv"
+                            }
+                        },
+                        "existing_capacity": 12
+                    }
+                }
+            },
+            {
+                "id": "eastern2_distributed_generation_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 0,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 0,
+                        "end_vertex": "elec_eastern2",
+                        "variable_om_cost": 0,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": {
+                            "timeseries": {
+                                "header": "eastern2_distributed_generation_1",
+                                "path": "system/mustrun_availability_2.csv"
+                            }
+                        },
+                        "existing_capacity": 2215
+                    }
+                }
+            },
+            {
+                "id": "eastern3_distributed_generation_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 0,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 0,
+                        "end_vertex": "elec_eastern3",
+                        "variable_om_cost": 0,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": {
+                            "timeseries": {
+                                "header": "eastern3_distributed_generation_1",
+                                "path": "system/mustrun_availability_2.csv"
+                            }
+                        },
+                        "existing_capacity": 1104
+                    }
+                }
+            },
+            {
+                "id": "eastern4_distributed_generation_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 0,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 0,
+                        "end_vertex": "elec_eastern4",
+                        "variable_om_cost": 0,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": {
+                            "timeseries": {
+                                "header": "eastern4_distributed_generation_1",
+                                "path": "system/mustrun_availability_2.csv"
+                            }
+                        },
+                        "existing_capacity": 5900
+                    }
+                }
+            },
+            {
+                "id": "eastern5_distributed_generation_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 0,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 0,
+                        "end_vertex": "elec_eastern5",
+                        "variable_om_cost": 0,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": {
+                            "timeseries": {
+                                "header": "eastern5_distributed_generation_1",
+                                "path": "system/mustrun_availability_2.csv"
+                            }
+                        },
+                        "existing_capacity": 1552
+                    }
+                }
+            },
+            {
+                "id": "eastern6_distributed_generation_1",
+                "edges": {
+                    "elec_edge": {
+                        "can_retire": true,
+                        "min_retired_capacity": 0,
+                        "annualized_investment_cost": 0,
+                        "lifetime": 50,
+                        "can_expand": false,
+                        "constraints": {
+                            "MustRunConstraint": true
+                        },
+                        "min_capacity": 0,
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 0,
+                        "end_vertex": "elec_eastern6",
+                        "variable_om_cost": 0,
+                        "capacity_size": 1,
+                        "wacc": 0,
+                        "capital_recovery_period": 0,
+                        "availability": {
+                            "timeseries": {
+                                "header": "eastern6_distributed_generation_1",
+                                "path": "system/mustrun_availability_2.csv"
+                            }
+                        },
+                        "existing_capacity": 7053
+                    }
+                }
+            }
+        ],
+        "type": "MustRun"
+    }
+}

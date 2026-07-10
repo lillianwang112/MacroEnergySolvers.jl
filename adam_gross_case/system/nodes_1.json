@@ -1,0 +1,896 @@
+{
+    "nodes": [
+        {
+            "global_data": {
+                "constraints": {
+                    "MaxNonServedDemandConstraint": true,
+                    "MaxNonServedDemandPerSegmentConstraint": true,
+                    "BalanceConstraint": true
+                },
+                "max_nsd": [
+                    1,
+                    0.04,
+                    0.024,
+                    0.003
+                ],
+                "time_interval": "Electricity",
+                "price_nsd": [
+                    2000,
+                    1800,
+                    1100,
+                    400
+                ]
+            },
+            "instance_data": [
+                {
+                    "demand": {
+                        "timeseries": {
+                            "header": "elec_demand_CO1",
+                            "path": "system/demand_1.csv"
+                        }
+                    },
+                    "id": "elec_CO1"
+                },
+                {
+                    "demand": {
+                        "timeseries": {
+                            "header": "elec_demand_FL1",
+                            "path": "system/demand_1.csv"
+                        }
+                    },
+                    "id": "elec_FL1"
+                },
+                {
+                    "demand": {
+                        "timeseries": {
+                            "header": "elec_demand_GC1",
+                            "path": "system/demand_1.csv"
+                        }
+                    },
+                    "id": "elec_GC1"
+                },
+                {
+                    "demand": {
+                        "timeseries": {
+                            "header": "elec_demand_GC2",
+                            "path": "system/demand_1.csv"
+                        }
+                    },
+                    "id": "elec_GC2"
+                },
+                {
+                    "demand": {
+                        "timeseries": {
+                            "header": "elec_demand_GC3",
+                            "path": "system/demand_1.csv"
+                        }
+                    },
+                    "id": "elec_GC3"
+                },
+                {
+                    "demand": {
+                        "timeseries": {
+                            "header": "elec_demand_GC4",
+                            "path": "system/demand_1.csv"
+                        }
+                    },
+                    "id": "elec_GC4"
+                },
+                {
+                    "demand": {
+                        "timeseries": {
+                            "header": "elec_demand_ID1",
+                            "path": "system/demand_1.csv"
+                        }
+                    },
+                    "id": "elec_ID1"
+                },
+                {
+                    "demand": {
+                        "timeseries": {
+                            "header": "elec_demand_KY1",
+                            "path": "system/demand_1.csv"
+                        }
+                    },
+                    "id": "elec_KY1"
+                },
+                {
+                    "demand": {
+                        "timeseries": {
+                            "header": "elec_demand_MT1",
+                            "path": "system/demand_1.csv"
+                        }
+                    },
+                    "id": "elec_MT1"
+                },
+                {
+                    "demand": {
+                        "timeseries": {
+                            "header": "elec_demand_NE1",
+                            "path": "system/demand_1.csv"
+                        }
+                    },
+                    "id": "elec_NE1"
+                },
+                {
+                    "demand": {
+                        "timeseries": {
+                            "header": "elec_demand_OK1",
+                            "path": "system/demand_1.csv"
+                        }
+                    },
+                    "id": "elec_OK1"
+                },
+                {
+                    "demand": {
+                        "timeseries": {
+                            "header": "elec_demand_TX2",
+                            "path": "system/demand_1.csv"
+                        }
+                    },
+                    "id": "elec_TX2"
+                },
+                {
+                    "demand": {
+                        "timeseries": {
+                            "header": "elec_demand_WY1",
+                            "path": "system/demand_1.csv"
+                        }
+                    },
+                    "id": "elec_WY1"
+                },
+                {
+                    "demand": {
+                        "timeseries": {
+                            "header": "elec_demand_eastern0",
+                            "path": "system/demand_1.csv"
+                        }
+                    },
+                    "id": "elec_eastern0"
+                },
+                {
+                    "demand": {
+                        "timeseries": {
+                            "header": "elec_demand_eastern1",
+                            "path": "system/demand_1.csv"
+                        }
+                    },
+                    "id": "elec_eastern1"
+                },
+                {
+                    "demand": {
+                        "timeseries": {
+                            "header": "elec_demand_eastern2",
+                            "path": "system/demand_1.csv"
+                        }
+                    },
+                    "id": "elec_eastern2"
+                },
+                {
+                    "demand": {
+                        "timeseries": {
+                            "header": "elec_demand_eastern3",
+                            "path": "system/demand_1.csv"
+                        }
+                    },
+                    "id": "elec_eastern3"
+                },
+                {
+                    "demand": {
+                        "timeseries": {
+                            "header": "elec_demand_eastern4",
+                            "path": "system/demand_1.csv"
+                        }
+                    },
+                    "id": "elec_eastern4"
+                },
+                {
+                    "demand": {
+                        "timeseries": {
+                            "header": "elec_demand_eastern5",
+                            "path": "system/demand_1.csv"
+                        }
+                    },
+                    "id": "elec_eastern5"
+                },
+                {
+                    "demand": {
+                        "timeseries": {
+                            "header": "elec_demand_eastern6",
+                            "path": "system/demand_1.csv"
+                        }
+                    },
+                    "id": "elec_eastern6"
+                },
+                {
+                    "demand": {
+                        "timeseries": {
+                            "header": "elec_demand_western1",
+                            "path": "system/demand_1.csv"
+                        }
+                    },
+                    "id": "elec_western1"
+                },
+                {
+                    "demand": {
+                        "timeseries": {
+                            "header": "elec_demand_western2",
+                            "path": "system/demand_1.csv"
+                        }
+                    },
+                    "id": "elec_western2"
+                },
+                {
+                    "demand": {
+                        "timeseries": {
+                            "header": "elec_demand_western3",
+                            "path": "system/demand_1.csv"
+                        }
+                    },
+                    "id": "elec_western3"
+                }
+            ],
+            "type": "Electricity"
+        },
+        {
+            "global_data": {
+                "time_interval": "NaturalGas"
+            },
+            "instance_data": [
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "CO1_naturalgas",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "CO1_naturalgas"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "FL1_naturalgas",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "FL1_naturalgas"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "GC1_naturalgas",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "GC1_naturalgas"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "GC2_naturalgas",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "GC2_naturalgas"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "GC3_naturalgas",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "GC3_naturalgas"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "GC4_naturalgas",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "GC4_naturalgas"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "ID1_naturalgas",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "ID1_naturalgas"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "KY1_naturalgas",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "KY1_naturalgas"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "MT1_naturalgas",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "MT1_naturalgas"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "NE1_naturalgas",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "NE1_naturalgas"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "OK1_naturalgas",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "OK1_naturalgas"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "TX2_naturalgas",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "TX2_naturalgas"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "WY1_naturalgas",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "WY1_naturalgas"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "eastern0_naturalgas",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "eastern0_naturalgas"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "eastern1_naturalgas",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "eastern1_naturalgas"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "eastern2_naturalgas",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "eastern2_naturalgas"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "eastern3_naturalgas",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "eastern3_naturalgas"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "eastern4_naturalgas",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "eastern4_naturalgas"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "eastern5_naturalgas",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "eastern5_naturalgas"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "eastern6_naturalgas",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "eastern6_naturalgas"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "western1_naturalgas",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "western1_naturalgas"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "western2_naturalgas",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "western2_naturalgas"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "western3_naturalgas",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "western3_naturalgas"
+                }
+            ],
+            "type": "NaturalGas"
+        },
+        {
+            "global_data": {
+                "time_interval": "Uranium"
+            },
+            "instance_data": [
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "FL1_uranium",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "FL1_uranium"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "GC1_uranium",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "GC1_uranium"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "GC4_uranium",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "GC4_uranium"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "NE1_uranium",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "NE1_uranium"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "TX2_uranium",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "TX2_uranium"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "eastern0_uranium",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "eastern0_uranium"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "eastern2_uranium",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "eastern2_uranium"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "eastern3_uranium",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "eastern3_uranium"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "eastern4_uranium",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "eastern4_uranium"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "eastern5_uranium",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "eastern5_uranium"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "eastern6_uranium",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "eastern6_uranium"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "western1_uranium",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "western1_uranium"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "western2_uranium",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "western2_uranium"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "western3_uranium",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "western3_uranium"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "CO1_uranium",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "CO1_uranium"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "GC2_uranium",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "GC2_uranium"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "GC3_uranium",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "GC3_uranium"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "ID1_uranium",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "ID1_uranium"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "KY1_uranium",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "KY1_uranium"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "MT1_uranium",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "MT1_uranium"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "OK1_uranium",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "OK1_uranium"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "WY1_uranium",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "WY1_uranium"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "eastern1_uranium",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "eastern1_uranium"
+                }
+            ],
+            "type": "Uranium"
+        },
+        {
+            "global_data": {
+                "time_interval": "Coal"
+            },
+            "instance_data": [
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "CO1_coal",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "CO1_coal"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "FL1_coal",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "FL1_coal"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "GC1_coal",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "GC1_coal"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "GC2_coal",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "GC2_coal"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "GC4_coal",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "GC4_coal"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "KY1_coal",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "KY1_coal"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "MT1_coal",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "MT1_coal"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "NE1_coal",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "NE1_coal"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "OK1_coal",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "OK1_coal"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "TX2_coal",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "TX2_coal"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "WY1_coal",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "WY1_coal"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "eastern0_coal",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "eastern0_coal"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "eastern1_coal",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "eastern1_coal"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "eastern2_coal",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "eastern2_coal"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "eastern3_coal",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "eastern3_coal"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "eastern4_coal",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "eastern4_coal"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "eastern5_coal",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "eastern5_coal"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "eastern6_coal",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "eastern6_coal"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "western1_coal",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "western1_coal"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "western2_coal",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "western2_coal"
+                },
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "western3_coal",
+                            "path": "system/fuel_prices_1.csv"
+                        }
+                    },
+                    "id": "western3_coal"
+                }
+            ],
+            "type": "Coal"
+        },
+        {
+            "global_data": {
+                "time_interval": "CO2"
+            },
+            "instance_data": [
+                {
+                    "id": "co2_sink_1"
+                }
+            ],
+            "type": "CO2"
+        },
+        {
+            "global_data": {
+                "time_interval": "CO2Captured"
+            },
+            "instance_data": [
+                {
+                    "id": "co2_sink_injection"
+                }
+            ],
+            "type": "CO2Captured"
+        },
+        {
+            "global_data": {
+                "time_interval": "Electricity"
+            },
+            "instance_data": [
+                {
+                    "id": "water_node"
+                }
+            ],
+            "type": "Electricity"
+        }
+    ]
+}
