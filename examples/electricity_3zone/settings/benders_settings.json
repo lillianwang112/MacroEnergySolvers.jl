@@ -1,0 +1,17 @@
+{
+  "MaxIter": 50,
+  "MaxCpuTime": 7200,
+  "ConvTol": 1e-4,
+  "StabParam": 0.5,
+  "StabDynamic": false,
+  "IntegerInvestment": false,
+  "Distributed": false,
+  "MGASlack": 0.05,
+  "MGAIterations": 50,
+  "MGARetainBendersCuts": 2,
+  "MGAMaxCuts": 100,
+  "MGAMethod": 0,
+  "MGAComboRatio": 0.25,
+  "MGARandomSeed": 42,
+  "MGAVectorSortMethod": "none"
+}
