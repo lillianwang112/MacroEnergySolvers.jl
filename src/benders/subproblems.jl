@@ -60,8 +60,19 @@ function add_slacks_to_subproblem!(subproblem::Model)
         @constraint(subproblem, [i in 1:n], -slack_eq[i] <= slack_max)
     end
 
-        fix.(slack_max,0.0); 
-    
+    # Add Big-M penalty to objective so elastic slack mode has a proper cost signal.
+    # When slack_max is fixed to 0 (normal solves), this term = 0 and has no effect.
+    # When unfixed (elastic mode), it makes unserved demand very expensive, driving
+    # the master to build capacity. Use 100x max existing objective coefficient,
+    # floored at 1.0 and capped at 1e8 to avoid numerical blow-up.
+    objfun = objective_function(subproblem)
+    abs_coeffs = filter(c -> c > 0.0, [abs(coefficient(objfun, v)) for v in all_variables(subproblem)])
+    raw_bigm = isempty(abs_coeffs) ? 1.0 : 100.0 * maximum(abs_coeffs)
+    big_m = clamp(raw_bigm, 1.0, 1e8)
+    @info "ElasticSlack Big-M penalty: $(big_m) (raw=$(round(raw_bigm, sigdigits=3)), capped=$(raw_bigm != big_m))"
+    set_objective_function(subproblem, objfun + big_m * slack_max)
+
+    fix.(slack_max,0.0);
 
     return nothing
 end
