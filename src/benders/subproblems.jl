@@ -138,11 +138,29 @@ function solve_subproblem(m::Model,planning_sol::NamedTuple,linking_variables_su
         use_farkas = dual_status(m) == MOI.INFEASIBILITY_CERTIFICATE
         if use_farkas
             lambda = [dual(FixRef(variable_by_name(m,y))) for y in linking_variables_sub];
+            # Build a set of linking variable refs for O(1) lookup
+            linking_var_set = Set(variable_by_name(m, y) for y in linking_variables_sub)
             physical_farkas = 0.0
             for (F, S) in list_of_constraint_types(m)
-                F <: JuMP.AbstractVariableRef && continue  # skip variable bounds/fixes (handled via linking_farkas; including them would double-count)
                 for con in all_constraints(m, F, S)
-                    if F <: JuMP.AbstractJuMPScalar
+                    if F <: JuMP.AbstractVariableRef
+                        # Variable bound/fix constraint: must include non-linking local variables
+                        # (e.g. coal_gen >= 150, import_flow <= 500) in pi^T*b, but skip linking
+                        # variable fix constraints since their contribution is already in linking_farkas.
+                        v = jump_function(constraint_object(con))
+                        v in linking_var_set && continue
+                        rhs = 0.0
+                        if S <: MOI.GreaterThan
+                            rhs = constraint_object(con).set.lower
+                        elseif S <: MOI.LessThan
+                            rhs = constraint_object(con).set.upper
+                        elseif S <: MOI.EqualTo
+                            rhs = constraint_object(con).set.value
+                        else
+                            continue  # Integer/ZeroOne: no meaningful dual in LP relaxation
+                        end
+                        physical_farkas += dual(con) * rhs
+                    elseif F <: JuMP.AbstractJuMPScalar
                         # Scalar affine constraint: normalized_rhs gives the RHS directly
                         physical_farkas += dual(con) * normalized_rhs(con)
                     elseif F <: AbstractVector
@@ -160,7 +178,7 @@ function solve_subproblem(m::Model,planning_sol::NamedTuple,linking_variables_su
             if op_cost > 0
                 @info "Farkas cut (dual ray): op_cost=$(round(op_cost, sigdigits=4)) [physical=$(round(physical_farkas, sigdigits=4)), linking=$(round(linking_farkas, sigdigits=4))], lambda_norm=$(round(norm(lambda), sigdigits=4)), lambda_max=$(round(maximum(abs.(lambda)), sigdigits=4)), n_nonzero=$(sum(abs.(lambda) .> 1e-8))/$(length(lambda))"
             else
-                @warn "Farkas objective = $(round(op_cost, sigdigits=4)) ≤ 0 — subproblem likely has non-zero native variable bounds (e.g. min stable generation) not captured by affine constraints. Falling back to slack approach."
+                @warn "Farkas objective = $(round(op_cost, sigdigits=4)) ≤ 0 — Farkas certificate may be degenerate or solver returned an invalid ray. Falling back to slack approach."
                 use_farkas = false
             end
         end
