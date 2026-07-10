@@ -138,12 +138,21 @@ function solve_subproblem(m::Model,planning_sol::NamedTuple,linking_variables_su
         use_farkas = dual_status(m) == MOI.INFEASIBILITY_CERTIFICATE
         if use_farkas
             lambda = [dual(FixRef(variable_by_name(m,y))) for y in linking_variables_sub];
-            physical_farkas = sum(
-                dual(con) * normalized_rhs(con)
-                for (F, S) in list_of_constraint_types(m, include_variable_in_set_constraints=false)
-                if F == AffExpr
+            physical_farkas = 0.0
+            for (F, S) in list_of_constraint_types(m, include_variable_in_set_constraints=false)
                 for con in all_constraints(m, F, S)
-            )
+                    if F <: JuMP.AbstractJuMPScalar
+                        # Scalar affine constraint: normalized_rhs gives the RHS directly
+                        physical_farkas += dual(con) * normalized_rhs(con)
+                    elseif F <: AbstractVector
+                        # Vector constraint (e.g. emission caps across zones):
+                        # dual() returns a Vector{Float64}; RHS equivalent is -moi_f.constants
+                        d = dual(con)
+                        moi_f = MOI.get(backend(m), MOI.ConstraintFunction(), index(con))
+                        physical_farkas += dot(d, -moi_f.constants)
+                    end
+                end
+            end
             linking_farkas = sum(lambda[i] * planning_sol.values[linking_variables_sub[i]] for i in 1:length(linking_variables_sub))
             op_cost = physical_farkas + linking_farkas
             theta_coeff = 0;
