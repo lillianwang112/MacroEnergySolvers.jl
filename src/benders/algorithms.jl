@@ -62,6 +62,32 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 		add_slacks_to_subproblems!(subproblems);
 	end
 
+	# Scale objectives once before any solve to improve numerical condition number.
+	# With obj~1e10 and unit-scale constraints, duals are corrupted. Scaling by 1/1e6
+	# brings the objective to ~1e4, which Gurobi's barrier handles cleanly.
+	# Everything stays in scaled space throughout (Benders + MGA); only divide back at write_outputs.
+	obj_scale = Float64(get(setup, :ObjScaleFactor, 1.0))
+	if obj_scale != 1.0
+		@info("Applying objective scaling by 1/$(obj_scale). LB/UB reported values will be unscaled.")
+		set_objective_function(planning_problem, objective_function(planning_problem) / obj_scale)
+		scale_subproblem_objectives!(subproblems, obj_scale)
+	end
+
+	# Enforce non-negativity on all linking variables. Physical capacities must be ≥ 0.
+	# Without this, the barrier solver exploits free directions (zero-cost variables with no
+	# lower bound) and proposes values like ±3e14, which destroys subproblem conditioning
+	# and produces garbage cuts (op_cost=0.00871, lambda_norm≈0) that never tighten LB.
+	all_linking_var_names = unique(vcat([linking_variables_sub[w] for w in keys(linking_variables_sub)]...))
+	n_bounds_added = 0
+	for y in all_linking_var_names
+		v = variable_by_name(planning_problem, y)
+		if v !== nothing && (!has_lower_bound(v) || lower_bound(v) < 0.0)
+			set_lower_bound(v, 0.0)
+			n_bounds_added += 1
+		end
+	end
+	@info("Enforced lower bound ≥ 0 on $n_bounds_added/$(length(all_linking_var_names)) linking variables missing non-negativity constraints")
+
 	add_approximate_variable_cost!(planning_problem,length(linking_variables_sub));
 
 	## Start solver time
@@ -146,8 +172,11 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 		@info("Solving the planning problem required $(tidy_timing(cpu_planning_sol)) seconds")
 
 		LB = max(LB,LBnew);
-		@info("The optimal value of the planning problem is $LBnew")
-		
+		@info("The optimal value of the planning problem is $(obj_scale * LBnew) (scaled: $LBnew)")
+		n_nonzero = sum(abs(v) > 1e-6 for v in values(unst_planning_sol.values))
+		cap_vals = collect(values(unst_planning_sol.values))
+		@info "Planning solution summary: $(n_nonzero)/$(length(planning_variables)) variables non-zero, sum=$(round(sum(cap_vals), sigdigits=4)), max=$(round(maximum(cap_vals), sigdigits=4)), min=$(round(minimum(cap_vals), sigdigits=4))"
+
 		running_gap = (UB-LB)/abs(LB)
 
 		append!(LB_hist,LB)
@@ -155,12 +184,13 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
         append!(cpu_time,time()-solver_start_time)
 		append!(gap_hist, running_gap)
 
-		info_string = "k = $k      LB = $(round_from_tol(LB, ConvTol, 2))     UB = $(round_from_tol(UB, ConvTol, 2))       Gap = $(round_from_tol(running_gap, ConvTol, 2))       CPU Time = $(tidy_timing(cpu_time[end]))"
+		info_string = "k = $k      LB = $(round_from_tol(obj_scale * LB, ConvTol, 2))     UB = $(round_from_tol(obj_scale * UB, ConvTol, 2))       Gap = $(round_from_tol(running_gap, ConvTol, 2))       CPU Time = $(tidy_timing(cpu_time[end]))"
 		if any(subop_sol[w].theta_coeff==0 for w in keys(subop_sol))
 			@info("*** $info_string")
 		else
 			@info("$info_string")
 		end
+		flush(stderr)
 
         if running_gap <= ConvTol
 			if running_gap < 0
@@ -192,6 +222,11 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 			break
 		elseif UB==Inf
 			planning_sol = deepcopy(unst_planning_sol);
+			# No finite UB yet — track most recent solution as best so the post-Benders
+			# subproblem solve (in MacroEnergy's operations.jl) uses the most cuts-informed
+			# planning solution rather than the initial pre-cut solution.
+			planning_sol_best = deepcopy(unst_planning_sol);
+			subop_sol_best = deepcopy(subop_sol);
 		else
 			if stab_method == "int_level_set"
 				if stab_dynamic == true && k >= 1

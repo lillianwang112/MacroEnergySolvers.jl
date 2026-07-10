@@ -328,7 +328,12 @@ function benders_mga(planning_problem::Model, subproblems::Union{Vector{Dict{Any
     #   :MGAVectorSortMethod   — "angle", "nearest-neighbor", or omit for no sorting
     #   :RelaxBudget           — optional tolerance for budget convergence check (e.g. 1e-4)
 
-    setup[:MGABudget] = benders_result.UB_hist[end] * (1 + setup[:MGASlack])
+    best_UB = benders_result.UB_hist[end]
+    if !isfinite(best_UB)
+        @error("Benders terminated with UB = Inf — no feasible subproblem solution was found in $(length(benders_result.UB_hist)) iterations. Cannot run MGA without a finite optimal cost. Check subproblem feasibility.")
+        return nothing
+    end
+    setup[:MGABudget] = best_UB * (1 + setup[:MGASlack])
 
     setup_mga_master_problem!(planning_problem, setup)
 

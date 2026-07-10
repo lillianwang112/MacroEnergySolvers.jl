@@ -66,6 +66,27 @@ function add_slacks_to_subproblem!(subproblem::Model)
     return nothing
 end
 
+function scale_local_subproblem_objectives!(subproblem_local::Vector{Dict{Any,Any}}, obj_scale::Float64)
+    for sp in subproblem_local
+        set_objective_function(sp[:model], objective_function(sp[:model]) / obj_scale)
+    end
+    return nothing
+end
+
+function scale_subproblem_objectives!(m_subproblems::Vector{Dict{Any, Any}}, obj_scale::Float64)
+    scale_local_subproblem_objectives!(m_subproblems, obj_scale)
+    return nothing
+end
+
+function scale_subproblem_objectives!(m_subproblems::DArray{Dict{Any, Any}, 1, Vector{Dict{Any, Any}}}, obj_scale::Float64)
+    @sync for p in workers()
+        @async @spawnat p begin
+            scale_local_subproblem_objectives!(localpart(m_subproblems), obj_scale)
+        end
+    end
+    return nothing
+end
+
 function fix_linking_variables!(m::Model,planning_sol::NamedTuple,linking_variables_sub::Vector{String})
     ### Fix linking variables in the subproblem to the values computed by the planning problem. 
 	for y in linking_variables_sub
@@ -80,17 +101,21 @@ function fix_linking_variables!(m::Model,planning_sol::NamedTuple,linking_variab
 end
 
 function solve_subproblem(m::Model,planning_sol::NamedTuple,linking_variables_sub::Vector{String},expect_feasible_subproblems::Bool)
-	
+
     ### Solve the operational subproblem. If it is infeasible, compute feasibility cuts.
 
 	fix_linking_variables!(m,planning_sol,linking_variables_sub)
 
+    # Enable Farkas dual extraction on infeasible solves
+    try; set_attribute(m, "InfUnbdInfo", 1); catch; end
+
 	optimize!(m)
-	
+
 	if has_values(m)
 		op_cost = objective_value(m);
 		lambda = [dual(FixRef(variable_by_name(m,y))) for y in linking_variables_sub];
-		theta_coeff = 1;	
+		theta_coeff = 1;
+		@info "Subproblem feasible: op_cost=$(round(op_cost, sigdigits=4)), status=$(termination_status(m)), lambda_norm=$(round(norm(lambda), sigdigits=4)), lambda_max=$(round(maximum(abs.(lambda)), sigdigits=4))"
     elseif expect_feasible_subproblems==true
         compute_conflict!(m)
             list_of_conflicting_constraints = ConstraintRef[];
@@ -102,46 +127,81 @@ function solve_subproblem(m::Model,planning_sol::NamedTuple,linking_variables_su
                 end
             end
         display(list_of_conflicting_constraints)
-        @error "The subproblem is infeasible, but ExpectFeasibleSubproblems = true. Set it to false to generate feasibility cuts."
+        error("The subproblem is infeasible, but ExpectFeasibleSubproblems = true. Benders likely did not converge before MaxIter was reached. Check conflicting constraints above.")
     else
-        @info "Subproblem is infeasible, generating feasibility cut..."
-        #### Feasibility cuts generation based on https://link.springer.com/chapter/10.1007/978-3-030-45771-6_7 
-        
-        unfix.(m[:slack_max]);
-        objfun = objective_function(m);
-        @objective(m, Min, m[:slack_max])
+        @info "Subproblem is infeasible (status=$(termination_status(m)), primal=$(primal_status(m)), dual=$(dual_status(m))), attempting Farkas dual feasibility cut..."
 
-        try; set_attribute(m, "Crossover", 0); catch; end
-        optimize!(m)
-        if !has_values(m)
-            # Barrier without crossover failed to converge; retry with crossover
-            try; set_attribute(m, "Crossover", 1); catch; end
-            optimize!(m)
-        end
-        if !has_values(m)
-            compute_conflict!(m)
-            list_of_conflicting_constraints = ConstraintRef[];
-            for (F, S) in list_of_constraint_types(m)
+        # Attempt Farkas dual approach: extract dual ray directly without re-solving.
+        # op_cost must be the full Farkas objective pi^T*b + lambda^T*x_bar (> 0 by certificate).
+        # Using only lambda^T*x_bar (the old formula) makes the cut 0 >= lambda^T*x — a hyperplane
+        # through the origin that trivially passes all x >= 0 and builds zero capacity pressure.
+        use_farkas = dual_status(m) == MOI.INFEASIBILITY_CERTIFICATE
+        if use_farkas
+            lambda = [dual(FixRef(variable_by_name(m,y))) for y in linking_variables_sub];
+            physical_farkas = sum(
+                dual(con) * normalized_rhs(con)
+                for (F, S) in list_of_constraint_types(m, include_variable_in_set_constraints=false)
                 for con in all_constraints(m, F, S)
-                    if get_attribute(con, MOI.ConstraintConflictStatus()) == MOI.IN_CONFLICT
-                        push!(list_of_conflicting_constraints, con)
+            )
+            linking_farkas = sum(lambda[i] * planning_sol.values[linking_variables_sub[i]] for i in 1:length(linking_variables_sub))
+            op_cost = physical_farkas + linking_farkas
+            theta_coeff = 0;
+            if op_cost > 0
+                @info "Farkas cut (dual ray): op_cost=$(round(op_cost, sigdigits=4)) [physical=$(round(physical_farkas, sigdigits=4)), linking=$(round(linking_farkas, sigdigits=4))], lambda_norm=$(round(norm(lambda), sigdigits=4)), lambda_max=$(round(maximum(abs.(lambda)), sigdigits=4)), n_nonzero=$(sum(abs.(lambda) .> 1e-8))/$(length(lambda))"
+            else
+                @warn "Farkas objective = $(round(op_cost, sigdigits=4)) ≤ 0 — subproblem likely has non-zero native variable bounds (e.g. min stable generation) not captured by affine constraints. Falling back to slack approach."
+                use_farkas = false
+            end
+        end
+        if !use_farkas
+            # Farkas duals unavailable or invalid — fall back to slack-based feasibility subproblem
+            if dual_status(m) == MOI.INFEASIBILITY_CERTIFICATE
+                @warn "Falling back to slack feasibility subproblem (Farkas objective was ≤ 0)..."
+            else
+                @warn "Farkas duals unavailable (dual_status=$(dual_status(m))), falling back to slack feasibility subproblem..."
+            end
+            #### Feasibility cuts generation based on https://link.springer.com/chapter/10.1007/978-3-030-45771-6_7
+
+            unfix.(m[:slack_max]);
+            objfun = objective_function(m);
+            @objective(m, Min, m[:slack_max])
+
+            try; set_attribute(m, "Crossover", 0); catch; end
+            optimize!(m)
+            if !has_values(m)
+                try; set_attribute(m, "Crossover", 1); catch; end
+                optimize!(m)
+            end
+            if !has_values(m)
+                @warn "Feasibility subproblem has no solution after barrier retries. Retrying with NumericFocus=3 and simplex."
+                try; set_attribute(m, "NumericFocus", 3); catch; end
+                try; set_attribute(m, "Method", 1); catch; end
+                optimize!(m)
+            end
+            if !has_values(m)
+                compute_conflict!(m)
+                list_of_conflicting_constraints = ConstraintRef[];
+                for (F, S) in list_of_constraint_types(m)
+                    for con in all_constraints(m, F, S)
+                        if get_attribute(con, MOI.ConstraintConflictStatus()) == MOI.IN_CONFLICT
+                            push!(list_of_conflicting_constraints, con)
+                        end
                     end
                 end
+                display(list_of_conflicting_constraints)
+                error("Feasibility subproblem is infeasible even with slack variables and NumericFocus=3. Check conflicting constraints above.")
             end
-            display(list_of_conflicting_constraints)
-            @error "Feasibility subproblem is infeasible, this should not happen. Check the model."
+            op_cost = objective_value(m);
+            lambda = [dual(FixRef(variable_by_name(m,y))) for y in linking_variables_sub];
+            theta_coeff = 0;
+            @info "Slack feasibility cut: op_cost=$(round(op_cost, sigdigits=4)), lambda_norm=$(round(norm(lambda), sigdigits=4)), lambda_max=$(round(maximum(abs.(lambda)), sigdigits=4)), n_nonzero=$(sum(abs.(lambda) .> 1e-8))/$(length(lambda))"
+
+            try; set_attribute(m, "Crossover", 1); catch; end
+            fix.(m[:slack_max], 0.0);
+            @objective(m, Min, objfun)
         end
-        op_cost = objective_value(m);
-        lambda = [dual(FixRef(variable_by_name(m,y))) for y in linking_variables_sub];
-		theta_coeff = 0;
-
-        try; set_attribute(m, "Crossover", 1); catch; end
-        fix.(m[:slack_max],0.0);
-
-        @objective(m, Min, objfun)
-
 	end
-    
+
 	return (op_cost=op_cost,lambda = lambda,theta_coeff=theta_coeff)
 
 end
