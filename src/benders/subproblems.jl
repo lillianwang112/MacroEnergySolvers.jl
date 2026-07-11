@@ -141,9 +141,13 @@ function solve_subproblem(m::Model,planning_sol::NamedTuple,linking_variables_su
                 @info "Subproblem feasible (slack=0): op_cost=$(round(op_cost, sigdigits=4)), lambda_norm=$(round(norm(lambda), sigdigits=4)), lambda_max=$(round(lmax, sigdigits=4))"
             end
             fix.(m[:slack_max], 0.0)  # re-fix for next iteration
-        else
-            @info "Subproblem feasible: op_cost=$(round(op_cost, sigdigits=4)), status=$(termination_status(m)), lambda_norm=$(round(norm(lambda), sigdigits=4)), lambda_max=$(round(lmax, sigdigits=4)), n_nonzero=$(sum(abs.(lambda) .> 1e-8))/$(length(lambda))"
         end
+    elseif elastic_slack
+        # ElasticSlack guarantees feasibility — !has_values here means the model is
+        # unbounded or numerically broken. Re-fix slack and surface a clear error.
+        @error "Subproblem infeasible/unbounded even with ElasticSlack active. status=$(termination_status(m)), primal=$(primal_status(m)), dual=$(dual_status(m)). Check model construction (e.g. unbounded variables, conflicting variable bounds)."
+        fix.(m[:slack_max], 0.0; force=true)
+        error("ElasticSlack subproblem failed (status=$(termination_status(m))). See @error above.")
     elseif expect_feasible_subproblems==true
         compute_conflict!(m)
             list_of_conflicting_constraints = ConstraintRef[];
@@ -219,7 +223,7 @@ function solve_subproblem(m::Model,planning_sol::NamedTuple,linking_variables_su
             end
             #### Feasibility cuts generation based on https://link.springer.com/chapter/10.1007/978-3-030-45771-6_7
 
-            unfix.(m[:slack_max]);
+            is_fixed(m[:slack_max]) && unfix(m[:slack_max])
             objfun = objective_function(m);
             @objective(m, Min, m[:slack_max])
 
