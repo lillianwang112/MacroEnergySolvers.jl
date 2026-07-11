@@ -6,6 +6,7 @@
   "StabDynamic": false,
   "IntegerInvestment": false,
   "Distributed": false,
+  "ElasticSlack": true,
   "MGASlack": 0.05,
   "MGAIterations": 50,
   "MGARetainBendersCuts": 2,
