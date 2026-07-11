@@ -204,6 +204,39 @@ function solve_subproblem(m::Model,planning_sol::NamedTuple,linking_variables_su
                     end
                 end
             end
+            # Diagnostic: set BENDERS_FARKAS_DEBUG=true to compare fix_value vs planning_sol.values.
+            # Distinguishes intrinsic extraction failure (proof_actual ≤ 0) from distributed
+            # pipeline mismatch (proof_actual > 0, proof_external ≤ 0).
+            if get(ENV, "BENDERS_FARKAS_DEBUG", "false") == "true"
+                x_fixed    = [fix_value(variable_by_name(m, y)) for y in linking_variables_sub]
+                x_planning = [planning_sol.values[y] for y in linking_variables_sub]
+                max_diff   = isempty(x_fixed) ? 0.0 : maximum(abs.(x_fixed .- x_planning))
+                proof_actual   = physical_farkas + dot(lambda, x_fixed)
+                proof_external = physical_farkas + dot(lambda, x_planning)
+                # ChatGPT's decisive test: proof_actual must equal dual_objective_value.
+                # If they differ, our extraction is missing dual contributions (likely variable bounds).
+                dov = dual_objective_value(m)
+                dov_ratio = abs(dov) < 1e-12 ? Inf : abs(proof_actual - dov) / abs(dov)
+                @info "FARKAS_DIAG: dual_status=$(dual_status(m)) physical=$(round(physical_farkas,sigdigits=4)) proof_actual=$(round(proof_actual,sigdigits=4)) proof_external=$(round(proof_external,sigdigits=4)) dual_obj_value=$(round(dov,sigdigits=4)) extraction_error=$(round(dov_ratio,sigdigits=3)) max_fix_vs_planning_diff=$(round(max_diff,sigdigits=4))"
+                if dov_ratio > 0.01
+                    @warn "FARKAS_DIAG INCOMPLETE EXTRACTION: proof_actual=$(round(proof_actual,sigdigits=4)) ≠ dual_objective_value=$(round(dov,sigdigits=4)) ($(round(dov_ratio*100,sigdigits=2))% error) — missing dual contributions, likely variable bounds on demand or local variables."
+                end
+                for i in eachindex(linking_variables_sub)
+                    diff = abs(x_fixed[i] - x_planning[i])
+                    if diff > 1e-6
+                        @warn "FARKAS_DIAG MISMATCH: $(linking_variables_sub[i]) fixed=$(round(x_fixed[i],sigdigits=4)) planning=$(round(x_planning[i],sigdigits=4)) Δ=$(round(diff,sigdigits=4)) λ=$(round(lambda[i],sigdigits=4))"
+                    end
+                end
+                if dov_ratio > 0.01
+                    @warn "FARKAS_DIAG VERDICT: INCOMPLETE EXTRACTION — manual proof ≠ dual_obj_value; cuts are missing contributions and physical_farkas=0 may be wrong."
+                elseif proof_actual > 0 && proof_external <= 0
+                    @error "FARKAS_DIAG VERDICT: SEVERED PIPELINE — planning_sol.values doesn't match fixed values; cut is anchored at the wrong x-bar."
+                elseif proof_actual > 0 && proof_external > 0
+                    @info "FARKAS_DIAG VERDICT: PIPELINE INTACT — extraction matches dual_obj_value; if cuts still degenerate, inspect cut anchor / sign convention."
+                else
+                    @warn "FARKAS_DIAG VERDICT: INVALID CERTIFICATE — proof_actual=$(round(proof_actual,sigdigits=4)) ≤ 0; Farkas ray may be degenerate or missing."
+                end
+            end
             linking_farkas = sum(lambda[i] * planning_sol.values[linking_variables_sub[i]] for i in 1:length(linking_variables_sub))
             op_cost = physical_farkas + linking_farkas
             theta_coeff = 0;
