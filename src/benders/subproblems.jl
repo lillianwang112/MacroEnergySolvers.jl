@@ -236,6 +236,51 @@ function solve_subproblem(m::Model,planning_sol::NamedTuple,linking_variables_su
                 else
                     @warn "FARKAS_DIAG VERDICT: INVALID CERTIFICATE — proof_actual=$(round(proof_actual,sigdigits=4)) ≤ 0; Farkas ray may be degenerate or missing."
                 end
+                # Cut validity test at x* (monolithic solution).
+                # Set BENDERS_MONO_RESULTS_DIR to a results/ directory containing capacity.csv.
+                # A valid Farkas cut must satisfy: physical_farkas + lambda^T * x* <= 0.
+                # Violation means the cut incorrectly excludes the feasible monolithic solution.
+                mono_dir = get(ENV, "BENDERS_MONO_RESULTS_DIR", "")
+                if !isempty(mono_dir) && proof_actual > 0
+                    cap_path = joinpath(mono_dir, "capacity.csv")
+                    if isfile(cap_path)
+                        mono_vals = Dict{String,Float64}()
+                        lines = readlines(cap_path)
+                        if length(lines) > 1
+                            header = split(lines[1], ",")
+                            cid_col = findfirst(==("component_id"), header)
+                            cap_col = findfirst(==("capacity"), header)
+                            if !isnothing(cid_col) && !isnothing(cap_col)
+                                for line in lines[2:end]
+                                    parts = split(line, ",")
+                                    length(parts) < max(cid_col, cap_col) && continue
+                                    cid = strip(parts[cid_col])
+                                    cap_val = tryparse(Float64, strip(parts[cap_col]))
+                                    (isnothing(cap_val) || isempty(cid)) && continue
+                                    # Variable names are vCAP_<component_id>_period<N>
+                                    mono_vals["vCAP_$(cid)_period1"] = cap_val
+                                end
+                            end
+                        end
+                        x_mono = [get(mono_vals, v, NaN) for v in linking_variables_sub]
+                        n_missing = sum(isnan, x_mono)
+                        x_mono_clean = [isnan(v) ? 0.0 : v for v in x_mono]
+                        cut_lhs_mono = physical_farkas + dot(lambda, x_mono_clean)
+                        @info "FARKAS_DIAG CUT@MONO: cut_lhs=$(round(cut_lhs_mono,sigdigits=4)) n_missing=$(n_missing)/$(length(lambda)) (cut valid if ≤0)"
+                        if cut_lhs_mono > 1e-4
+                            @error "FARKAS_DIAG CUT@MONO INVALID: cut_lhs=$(round(cut_lhs_mono,sigdigits=4)) > 0 at monolithic x* — cut incorrectly excludes the feasible solution; check coefficient signs or index mapping"
+                        elseif cut_lhs_mono > 0
+                            @warn "FARKAS_DIAG CUT@MONO MARGINAL: cut_lhs=$(round(cut_lhs_mono,sigdigits=6)) barely > 0 — possible unit mismatch or numerical noise"
+                        else
+                            @info "FARKAS_DIAG CUT@MONO VALID: cut does not exclude monolithic x*"
+                        end
+                        if n_missing > 0
+                            @warn "FARKAS_DIAG CUT@MONO: $(n_missing) linking variables not found in capacity.csv (treated as 0); check period index or variable naming"
+                        end
+                    else
+                        @warn "FARKAS_DIAG CUT@MONO: capacity.csv not found at $(cap_path)"
+                    end
+                end
             end
             linking_farkas = sum(lambda[i] * planning_sol.values[linking_variables_sub[i]] for i in 1:length(linking_variables_sub))
             op_cost = physical_farkas + linking_farkas
