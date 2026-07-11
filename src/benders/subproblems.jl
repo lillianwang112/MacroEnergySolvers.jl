@@ -274,6 +274,14 @@ function solve_subproblem(m::Model,planning_sol::NamedTuple,linking_variables_su
                         else
                             @info "FARKAS_DIAG CUT@MONO VALID: cut does not exclude monolithic x*"
                         end
+                        # Report nonzero-lambda variables: found vs missing in capacity.csv
+                        for i in eachindex(linking_variables_sub)
+                            if abs(lambda[i]) > 1e-8
+                                found = !isnan(x_mono[i])
+                                tag = found ? "found x*=$(round(x_mono[i],sigdigits=4))" : "MISSING (treated as 0)"
+                                @info "FARKAS_DIAG CUT@MONO nonzero_lambda: $(linking_variables_sub[i]) λ=$(round(lambda[i],sigdigits=4)) $(tag) contrib=$(round(lambda[i]*(found ? x_mono[i] : 0.0),sigdigits=4))"
+                            end
+                        end
                         if n_missing > 0
                             @warn "FARKAS_DIAG CUT@MONO: $(n_missing) linking variables not found in capacity.csv (treated as 0); check period index or variable naming"
                         end
