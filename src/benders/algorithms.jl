@@ -75,20 +75,25 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 		scale_subproblem_objectives!(subproblems, obj_scale)
 	end
 
-	# Enforce non-negativity on all linking variables. Physical capacities must be ≥ 0.
+	# Enforce non-negativity on capacity linking variables only. Physical capacities must be ≥ 0.
 	# Without this, the barrier solver exploits free directions (zero-cost variables with no
 	# lower bound) and proposes values like ±3e14, which destroys subproblem conditioning
 	# and produces garbage cuts (op_cost=0.00871, lambda_norm≈0) that never tighten LB.
+	# Restricted to "vCAP_"-named variables: other linking variables (e.g. LongDurationStorage's
+	# vSTOR_CHANGE_, which is a signed net-change term, or policy budget variables) are
+	# deliberately unbounded/signed by MacroEnergy.jl's own model construction and must not
+	# be clamped to ≥ 0 here.
 	all_linking_var_names = unique(vcat([linking_variables_sub[w] for w in keys(linking_variables_sub)]...))
+	capacity_var_names = filter(y -> startswith(y, "vCAP_"), all_linking_var_names)
 	n_bounds_added = 0
-	for y in all_linking_var_names
+	for y in capacity_var_names
 		v = variable_by_name(planning_problem, y)
 		if v !== nothing && (!has_lower_bound(v) || lower_bound(v) < 0.0)
 			set_lower_bound(v, 0.0)
 			n_bounds_added += 1
 		end
 	end
-	@info("Enforced lower bound ≥ 0 on $n_bounds_added/$(length(all_linking_var_names)) linking variables missing non-negativity constraints")
+	@info("Enforced lower bound ≥ 0 on $n_bounds_added/$(length(capacity_var_names)) capacity linking variables (of $(length(all_linking_var_names)) total linking variables) missing non-negativity constraints")
 
 	add_approximate_variable_cost!(planning_problem,length(linking_variables_sub));
 
