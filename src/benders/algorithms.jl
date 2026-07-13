@@ -131,6 +131,45 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
     #### Initialize UB and LB
 	planning_sol, LB = solve_planning_problem(planning_problem,planning_variables);
 
+	# Pre-compute Budget linking variable groups and their constraint RHS.
+	# Budget vars (names matching *_Budget_*[w]) are subject to sum==RHS equality constraints
+	# in the master. The bare LP concentrates all budget at one subperiod (zero-cost simplex
+	# vertex), leaving other subperiods with Budget≈0 → permanently infeasible → degenerate
+	# 2-variable Farkas cuts that push Budget up by ~0.003 units per iteration (confirmed in
+	# logs: x_plan≈0.013 vs needed ~8.3M due to ConstraintScaling).  We store the RHS here
+	# (= sum of initial LP values, correct because the equality constraint is always satisfied)
+	# and use it to override planning_sol to a uniform distribution before each subproblem
+	# evaluation while UB==Inf.  LB is unaffected (LB = objective_value from the LP, not
+	# from planning_sol).
+	budget_group_rhs = Dict{String, Tuple{Vector{String}, Float64}}()
+	for y in all_linking_var_names
+		m_bgt = match(r"^(.*_Budget_.*)\[\d+\]$", y)
+		m_bgt === nothing && continue
+		key = m_bgt.captures[1]
+		if !haskey(budget_group_rhs, key)
+			budget_group_rhs[key] = (String[], 0.0)
+		end
+		push!(budget_group_rhs[key][1], y)
+	end
+	for (key, (vars, _)) in budget_group_rhs
+		rhs = sum(get(planning_sol.values, y, 0.0) for y in vars)
+		budget_group_rhs[key] = (vars, rhs)
+	end
+	n_budget_groups = length(budget_group_rhs)
+	n_budget_vars   = sum(length(v) for (v,_) in values(budget_group_rhs))
+	if n_budget_groups > 0
+		@info("Budget uniform override: detected $n_budget_vars Budget linking vars across $n_budget_groups groups. Will distribute uniformly to planning_sol while UB==Inf to prevent LP vertex concentration.")
+		# Apply uniform override to the initial planning_sol so the very first
+		# subproblem evaluation (k=0) also uses a balanced Budget.
+		for (_, (vars, rhs)) in budget_group_rhs
+			rhs <= 0 && continue
+			uniform_val = rhs / length(vars)
+			for y in vars
+				planning_sol.values[y] = uniform_val
+			end
+		end
+	end
+
     UB = Inf;
 
     LB_hist = Float64[];
@@ -228,10 +267,26 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 			break
 		elseif UB==Inf
 			planning_sol = deepcopy(unst_planning_sol);
+			# Override Budget to uniform distribution before the next subproblem evaluation.
+			# The LP re-concentrates Budget at a simplex vertex each iteration (one period gets
+			# ~all of the cap, others get ~0).  Subproblems with Budget≈0 are always infeasible,
+			# generating weak 2-variable Farkas cuts that push Budget by ~0.003 units/iter.
+			# Uniform override sends each subproblem a Budget equal to cap/n_subperiods, which
+			# is within the feasible range (CO2 cap is non-binding in this case).  The cuts
+			# generated at the uniform x_bar are globally valid and carry strong Budget signal
+			# (lambda_Budget*(uniform - 0) >> FeasibilityTol), breaking the vertex cycling.
+			# LB is not affected — it comes from objective_value(m), not planning_sol.
+			for (_, (vars, rhs)) in budget_group_rhs
+				rhs <= 0 && continue
+				uniform_val = rhs / length(vars)
+				for y in vars
+					planning_sol.values[y] = uniform_val
+				end
+			end
 			# No finite UB yet — track most recent solution as best so the post-Benders
 			# subproblem solve (in MacroEnergy's operations.jl) uses the most cuts-informed
 			# planning solution rather than the initial pre-cut solution.
-			planning_sol_best = deepcopy(unst_planning_sol);
+			planning_sol_best = deepcopy(planning_sol);
 			subop_sol_best = deepcopy(subop_sol);
 		else
 			if stab_method == "int_level_set"
