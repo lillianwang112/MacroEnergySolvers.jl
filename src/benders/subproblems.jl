@@ -170,56 +170,33 @@ function solve_subproblem(m::Model,planning_sol::NamedTuple,linking_variables_su
         use_farkas = dual_status(m) == MOI.INFEASIBILITY_CERTIFICATE
         if use_farkas
             lambda = [dual(FixRef(variable_by_name(m,y))) for y in linking_variables_sub];
-            # Build a set of linking variable refs for O(1) lookup
-            linking_var_set = Set(variable_by_name(m, y) for y in linking_variables_sub)
-            physical_farkas = 0.0
-            for (F, S) in list_of_constraint_types(m)
-                for con in all_constraints(m, F, S)
-                    if F <: JuMP.AbstractVariableRef
-                        # Variable bound/fix constraint: must include non-linking local variables
-                        # (e.g. coal_gen >= 150, import_flow <= 500) in pi^T*b, but skip linking
-                        # variable fix constraints since their contribution is already in linking_farkas.
-                        v = jump_function(constraint_object(con))
-                        v in linking_var_set && continue
-                        rhs = 0.0
-                        if S <: MOI.GreaterThan
-                            rhs = constraint_object(con).set.lower
-                        elseif S <: MOI.LessThan
-                            rhs = constraint_object(con).set.upper
-                        elseif S <: MOI.EqualTo
-                            rhs = constraint_object(con).set.value
-                        else
-                            continue  # Integer/ZeroOne: no meaningful dual in LP relaxation
-                        end
-                        physical_farkas += dual(con) * rhs
-                    elseif F <: JuMP.AbstractJuMPScalar
-                        # Scalar affine constraint: normalized_rhs gives the RHS directly
-                        physical_farkas += dual(con) * normalized_rhs(con)
-                    elseif F <: AbstractVector
-                        # Vector constraint (e.g. emission caps across zones):
-                        # dual() returns a Vector{Float64}; RHS equivalent is -moi_f.constants
-                        d = dual(con)
-                        moi_f = MOI.get(backend(m), MOI.ConstraintFunction(), index(con))
-                        physical_farkas += dot(d, -moi_f.constants)
-                    end
-                end
+            # Use Gurobi's certified dual objective directly instead of manually
+            # reconstructing pi'b from constraint duals.  The manual loop missed up to 97%
+            # of the certificate (variable-bound and bridged-constraint terms not reachable
+            # via list_of_constraint_types).  dual_objective_value(m) = pi'b for all
+            # constraints including bounds — the complete Farkas proof.
+            cert = dual_objective_value(m)
+            # Normalize so max|lambda| <= 1.  Near-zero Budget linking variables produce
+            # extreme dual multipliers (lambda_max ~ 1e5) that create ill-conditioned master
+            # rows.  Dividing by a positive scalar preserves the halfspace and scales cert
+            # proportionally so the separation margin cert/s stays >> FeasibilityTol.
+            lambda_scale = isempty(lambda) ? 1.0 : maximum(abs.(lambda))
+            if lambda_scale > 1.0
+                lambda = lambda ./ lambda_scale
+                cert   = cert   / lambda_scale
             end
-            # Diagnostic: set BENDERS_FARKAS_DEBUG=true to compare fix_value vs planning_sol.values.
-            # Distinguishes intrinsic extraction failure (proof_actual ≤ 0) from distributed
-            # pipeline mismatch (proof_actual > 0, proof_external ≤ 0).
+            # Diagnostic: set BENDERS_FARKAS_DEBUG=true to validate cut pipeline.
+            # cert = dual_objective_value(m)/lambda_scale is the complete Farkas proof.
+            # separation_margin = cert = cut value at x_bar (must be >> FeasibilityTol=1e-6).
             if get(ENV, "BENDERS_FARKAS_DEBUG", "false") == "true"
                 x_fixed    = [fix_value(variable_by_name(m, y)) for y in linking_variables_sub]
                 x_planning = [planning_sol.values[y] for y in linking_variables_sub]
                 max_diff   = isempty(x_fixed) ? 0.0 : maximum(abs.(x_fixed .- x_planning))
-                proof_actual   = physical_farkas + dot(lambda, x_fixed)
-                proof_external = physical_farkas + dot(lambda, x_planning)
-                # ChatGPT's decisive test: proof_actual must equal dual_objective_value.
-                # If they differ, our extraction is missing dual contributions (likely variable bounds).
-                dov = dual_objective_value(m)
-                dov_ratio = abs(dov) < 1e-12 ? Inf : abs(proof_actual - dov) / abs(dov)
-                @info "FARKAS_DIAG: dual_status=$(dual_status(m)) physical=$(round(physical_farkas,sigdigits=4)) proof_actual=$(round(proof_actual,sigdigits=4)) proof_external=$(round(proof_external,sigdigits=4)) dual_obj_value=$(round(dov,sigdigits=4)) extraction_error=$(round(dov_ratio,sigdigits=3)) max_fix_vs_planning_diff=$(round(max_diff,sigdigits=4))"
-                if dov_ratio > 0.01
-                    @warn "FARKAS_DIAG INCOMPLETE EXTRACTION: proof_actual=$(round(proof_actual,sigdigits=4)) ≠ dual_objective_value=$(round(dov,sigdigits=4)) ($(round(dov_ratio*100,sigdigits=2))% error) — missing dual contributions, likely variable bounds on demand or local variables."
+                linking_farkas_diag = isempty(x_fixed) ? 0.0 : dot(lambda, x_fixed)
+                physical_farkas_diag = cert - linking_farkas_diag
+                @info "FARKAS_DIAG: dual_status=$(dual_status(m)) cert_raw=$(round(cert*lambda_scale,sigdigits=4)) lambda_scale=$(round(lambda_scale,sigdigits=4)) cert_norm=$(round(cert,sigdigits=4)) physical_norm=$(round(physical_farkas_diag,sigdigits=4)) separation_margin=$(round(cert,sigdigits=4)) max_fix_vs_planning_diff=$(round(max_diff,sigdigits=4))"
+                if cert < 1e-6
+                    @warn "FARKAS_DIAG: separation_margin=$(round(cert,sigdigits=4)) < FeasibilityTol=1e-6 — normalized cut may not separate x_bar from master"
                 end
                 for i in eachindex(linking_variables_sub)
                     diff = abs(x_fixed[i] - x_planning[i])
@@ -227,14 +204,10 @@ function solve_subproblem(m::Model,planning_sol::NamedTuple,linking_variables_su
                         @warn "FARKAS_DIAG MISMATCH: $(linking_variables_sub[i]) fixed=$(round(x_fixed[i],sigdigits=4)) planning=$(round(x_planning[i],sigdigits=4)) Δ=$(round(diff,sigdigits=4)) λ=$(round(lambda[i],sigdigits=4))"
                     end
                 end
-                if dov_ratio > 0.01
-                    @warn "FARKAS_DIAG VERDICT: INCOMPLETE EXTRACTION — manual proof ≠ dual_obj_value; cuts are missing contributions and physical_farkas=0 may be wrong."
-                elseif proof_actual > 0 && proof_external <= 0
-                    @error "FARKAS_DIAG VERDICT: SEVERED PIPELINE — planning_sol.values doesn't match fixed values; cut is anchored at the wrong x-bar."
-                elseif proof_actual > 0 && proof_external > 0
-                    @info "FARKAS_DIAG VERDICT: PIPELINE INTACT — extraction matches dual_obj_value; if cuts still degenerate, inspect cut anchor / sign convention."
+                if cert > 1e-4
+                    @info "FARKAS_DIAG VERDICT: PIPELINE OK — separation_margin=$(round(cert,sigdigits=4)) >> FeasibilityTol."
                 else
-                    @warn "FARKAS_DIAG VERDICT: INVALID CERTIFICATE — proof_actual=$(round(proof_actual,sigdigits=4)) ≤ 0; Farkas ray may be degenerate or missing."
+                    @warn "FARKAS_DIAG VERDICT: WEAK SEPARATION — separation_margin=$(round(cert,sigdigits=4)) ≤ 1e-4; cut may be ineffective at separating x_bar."
                 end
                 # Cut validity test at x* (monolithic solution).
                 # Set BENDERS_MONO_RESULTS_DIR to a results/ directory containing capacity.csv.
@@ -242,7 +215,7 @@ function solve_subproblem(m::Model,planning_sol::NamedTuple,linking_variables_su
                 # compute_mono_linking_vars.jl) to cover non-capacity linking variables.
                 # A valid Farkas cut must satisfy: physical_farkas + lambda^T * x* <= 0.
                 mono_dir = get(ENV, "BENDERS_MONO_RESULTS_DIR", "")
-                if !isempty(mono_dir) && proof_actual > 0
+                if !isempty(mono_dir) && cert > 0
                     cap_path = joinpath(mono_dir, "capacity.csv")
                     if isfile(cap_path)
                         mono_vals = Dict{String,Float64}()
@@ -284,7 +257,7 @@ function solve_subproblem(m::Model,planning_sol::NamedTuple,linking_variables_su
                         x_mono = [get(mono_vals, v, NaN) for v in linking_variables_sub]
                         n_missing = sum(isnan, x_mono)
                         x_mono_clean = [isnan(v) ? 0.0 : v for v in x_mono]
-                        cut_lhs_mono = physical_farkas + dot(lambda, x_mono_clean)
+                        cut_lhs_mono = physical_farkas_diag + dot(lambda, x_mono_clean)
                         complete = n_missing == 0 ? "COMPLETE" : "PARTIAL($(n_missing) missing→0)"
                         @info "FARKAS_DIAG CUT@MONO: cut_lhs=$(round(cut_lhs_mono,sigdigits=4)) [$(complete)] (cut valid if ≤0)"
                         if cut_lhs_mono > 1e-4
@@ -311,10 +284,21 @@ function solve_subproblem(m::Model,planning_sol::NamedTuple,linking_variables_su
                 end
             end
             linking_farkas = sum(lambda[i] * planning_sol.values[linking_variables_sub[i]] for i in 1:length(linking_variables_sub))
-            op_cost = physical_farkas + linking_farkas
+            physical_farkas = cert - linking_farkas  # for logging; cert = physical_farkas + linking_farkas
+            op_cost = cert
             theta_coeff = 0;
+            n_nz = sum(abs.(lambda) .> 1e-8)
             if op_cost > 0
-                @info "Farkas cut (dual ray): op_cost=$(round(op_cost, sigdigits=4)) [physical=$(round(physical_farkas, sigdigits=4)), linking=$(round(linking_farkas, sigdigits=4))], lambda_norm=$(round(norm(lambda), sigdigits=4)), lambda_max=$(round(maximum(abs.(lambda)), sigdigits=4)), n_nonzero=$(sum(abs.(lambda) .> 1e-8))/$(length(lambda))"
+                @info "Farkas cut (dual ray): op_cost=$(round(op_cost, sigdigits=4)) [physical=$(round(physical_farkas, sigdigits=4)), linking=$(round(linking_farkas, sigdigits=4))], lambda_norm=$(round(norm(lambda), sigdigits=4)), lambda_max=$(round(maximum(abs.(lambda)), sigdigits=4)), n_nonzero=$(n_nz)/$(length(lambda))"
+                # Always log sparse cuts — these indicate potential cycling on Budget/policy constraints
+                if n_nz <= 10
+                    for i in eachindex(linking_variables_sub)
+                        if abs(lambda[i]) > 1e-8
+                            pval = planning_sol.values[linking_variables_sub[i]]
+                            @info "  SPARSE_CUT var=$(linking_variables_sub[i]) λ=$(round(lambda[i],sigdigits=4)) x_plan=$(round(pval,sigdigits=4)) contrib=$(round(lambda[i]*pval,sigdigits=4))"
+                        end
+                    end
+                end
             else
                 @warn "Farkas objective = $(round(op_cost, sigdigits=4)) ≤ 0 — Farkas certificate may be degenerate or solver returned an invalid ray. Falling back to slack approach."
                 use_farkas = false
@@ -419,7 +403,7 @@ function solve_subproblems(m_subproblems::DArray{Dict{Any, Any}, 1, Vector{Dict{
     p_id = workers();
     np_id = length(p_id);
 
-    sub_results = [Dict() for k in 1:np_id];
+    sub_results = [Dict() for _ in 1:np_id];
 
     @sync for k in 1:np_id
               @async sub_results[k]= @fetchfrom p_id[k] solve_local_subproblems(localpart(m_subproblems),planning_sol,expect_feasible_subproblems,elastic_slack); ### This is equivalent to fetch(@spawnat p .....)
