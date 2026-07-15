@@ -44,8 +44,8 @@ function solve_int_level_set_problem(m::Model,planning_variables::Vector{String}
 		planning_sol = (;planning_sol..., planning_cost = planning_cost, values = variable_values)
 		
 	else
-		
-		@warn  "the interior level set problem solution failed"
+
+		@warn "the interior level set problem solution failed" termination_status=termination_status(m) primal_status=primal_status(m) raw_status=raw_status(m)
 
 	end
 
