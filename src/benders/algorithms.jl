@@ -344,7 +344,7 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
         if !isempty(hydro_keys)
             period_groups = Dict{String,Vector{String}}()
             for v in hydro_keys
-                m_ps = match(r"(period_\d+\[\d+\])$", v)
+                m_ps = match(r"(period\d+\[\d+\])$", v)
                 key_ps = isnothing(m_ps) ? "unknown" : m_ps.captures[1]
                 push!(get!(period_groups, key_ps, String[]), v)
             end
