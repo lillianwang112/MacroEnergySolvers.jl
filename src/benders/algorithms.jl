@@ -227,24 +227,6 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 		cpu_planning_sol = time()-start_planning_sol;
 		@info("Solving the planning problem required $(tidy_timing(cpu_planning_sol)) seconds")
 
-        # Cross-iteration Farkas cut violation check.
-        # If a previously inserted cut sum(lambda^T * x) <= 0 is violated at the new
-        # planning solution, either the cut was inserted incorrectly or planning_sol
-        # does not reflect the master's actual solution — both are pipeline bugs.
-        n_cut_violations = 0
-        for cut in historical_farkas_cuts
-            lhs = sum(cut.lambda[i] * get(unst_planning_sol.values, cut.linking_vars[i], 0.0) for i in 1:length(cut.linking_vars))
-            if lhs > 1e-4
-                n_cut_violations += 1
-                @warn "FARKAS_CUT_VIOLATION: w=$(cut.w) k_added=$(cut.k_added) lambda^T*x_new=$(round(lhs,sigdigits=4)) > 0 (cut requires ≤ 0); cert_at_generation=$(round(cut.cert,sigdigits=4))"
-            end
-        end
-        if n_cut_violations == 0 && !isempty(historical_farkas_cuts)
-            @info "FARKAS_CUT_CHECK: all $(length(historical_farkas_cuts)) historical Farkas cuts satisfied at new planning_sol"
-        elseif n_cut_violations > 0
-            @warn "FARKAS_CUT_CHECK: $(n_cut_violations)/$(length(historical_farkas_cuts)) historical Farkas cuts VIOLATED at new planning_sol — pipeline bug suspected"
-        end
-
 		LB = max(LB,LBnew);
 		@info("The optimal value of the planning problem is $(obj_scale * LBnew) (scaled: $LBnew)")
 		n_nonzero = sum(abs(v) > 1e-6 for v in values(unst_planning_sol.values))
@@ -352,6 +334,41 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 			end
 
 		end
+
+        # Post-stabilization diagnostics: planning_sol is now the actual point sent to subproblems.
+        stab_max_diff = isempty(unst_planning_sol.values) ? 0.0 : maximum(abs(get(planning_sol.values, vk, 0.0) - get(unst_planning_sol.values, vk, 0.0)) for vk in keys(unst_planning_sol.values))
+        @info "STAB_DIFF: max|planning_sol - unst_planning_sol| = $(round(stab_max_diff, sigdigits=4))"
+
+        # Log aggregate vSTOR_CHANGE sums for hydro assets at both candidates.
+        hydro_keys = filter(v -> contains(v, "vSTOR_CHANGE") && contains(v, "hydroelectric"), collect(keys(unst_planning_sol.values)))
+        if !isempty(hydro_keys)
+            period_groups = Dict{String,Vector{String}}()
+            for v in hydro_keys
+                m_ps = match(r"(period_\d+\[\d+\])$", v)
+                key_ps = isnothing(m_ps) ? "unknown" : m_ps.captures[1]
+                push!(get!(period_groups, key_ps, String[]), v)
+            end
+            for (ps, vars) in sort(collect(period_groups), by=first)
+                sum_unst = sum(get(unst_planning_sol.values, v, 0.0) for v in vars)
+                sum_stab = sum(get(planning_sol.values, v, 0.0) for v in vars)
+                @info "HYDRO_SUM: $(ps) unst=$(round(sum_unst,sigdigits=4)) stab=$(round(sum_stab,sigdigits=4)) Δ=$(round(sum_stab-sum_unst,sigdigits=4))"
+            end
+        end
+
+        # Cross-iteration Farkas cut violation check on stabilized planning_sol.
+        n_cut_violations = 0
+        for cut in historical_farkas_cuts
+            lhs = sum(cut.lambda[i] * (haskey(planning_sol.values, cut.linking_vars[i]) ? planning_sol.values[cut.linking_vars[i]] : error("FARKAS_CUT_CHECK: variable $(cut.linking_vars[i]) missing from planning_sol.values")) for i in 1:length(cut.linking_vars))
+            if lhs > 1e-4
+                n_cut_violations += 1
+                @warn "FARKAS_CUT_VIOLATION: w=$(cut.w) k_added=$(cut.k_added) lambda^T*planning_sol=$(round(lhs,sigdigits=4)) > 0 (cut requires ≤ 0); cert=$(round(cut.cert,sigdigits=4))"
+            end
+        end
+        if n_cut_violations == 0 && !isempty(historical_farkas_cuts)
+            @info "FARKAS_CUT_CHECK: all $(length(historical_farkas_cuts)) historical Farkas cuts satisfied at stabilized planning_sol"
+        elseif n_cut_violations > 0
+            @warn "FARKAS_CUT_CHECK: $(n_cut_violations)/$(length(historical_farkas_cuts)) historical Farkas cuts VIOLATED at stabilized planning_sol — stabilization moved solution outside feasible cone"
+        end
 
     end
 
