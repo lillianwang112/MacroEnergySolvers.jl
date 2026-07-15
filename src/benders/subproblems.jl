@@ -283,19 +283,32 @@ function solve_subproblem(m::Model,planning_sol::NamedTuple,linking_variables_su
                     end
                 end
             end
-            linking_farkas = sum(lambda[i] * planning_sol.values[linking_variables_sub[i]] for i in 1:length(linking_variables_sub))
+            # Compute linking_farkas using fix_value (the actual fixed value Gurobi saw) to
+            # detect any mismatch vs planning_sol.values, which would corrupt the alpha term.
+            x_fixed_vals = [fix_value(variable_by_name(m, linking_variables_sub[i])) for i in 1:length(linking_variables_sub)]
+            linking_farkas_fixed  = sum(lambda[i] * x_fixed_vals[i]                                     for i in 1:length(linking_variables_sub))
+            linking_farkas_plan   = sum(lambda[i] * planning_sol.values[linking_variables_sub[i]]        for i in 1:length(linking_variables_sub))
+            max_fix_vs_plan_diff  = maximum(abs(x_fixed_vals[i] - planning_sol.values[linking_variables_sub[i]]) for i in 1:length(linking_variables_sub))
+            linking_farkas = linking_farkas_plan  # used in cut; must be consistent with x_bar in master cut formula
             physical_farkas = cert - linking_farkas  # for logging; cert = physical_farkas + linking_farkas
+            # alpha = cert - lambda^T*x_bar = physical_farkas (relative to planning_sol)
+            # The cut added to master expands to: 0 >= alpha + lambda^T*x, where alpha=physical_farkas.
+            # alpha=0 => cut is 0 >= lambda^T*x (origin-passing halfspace); repeated identical (lambda,alpha)
+            # tuples are duplicate rows. Log relative alpha to distinguish from rounding artifacts.
+            alpha_rel = abs(physical_farkas) / max(1.0, abs(cert))
             op_cost = cert
             theta_coeff = 0;
             n_nz = sum(abs.(lambda) .> 1e-8)
             if op_cost > 0
-                @info "Farkas cut (dual ray): op_cost=$(round(op_cost, sigdigits=4)) [physical=$(round(physical_farkas, sigdigits=4)), linking=$(round(linking_farkas, sigdigits=4))], lambda_norm=$(round(norm(lambda), sigdigits=4)), lambda_max=$(round(maximum(abs.(lambda)), sigdigits=4)), n_nonzero=$(n_nz)/$(length(lambda))"
-                # Always log sparse cuts — these indicate potential cycling on Budget/policy constraints
-                if n_nz <= 10
+                @info "Farkas cut (dual ray): op_cost=$(round(op_cost, sigdigits=4)) [physical=$(round(physical_farkas, sigdigits=6)) rel=$(round(alpha_rel, sigdigits=3)), linking_plan=$(round(linking_farkas_plan, sigdigits=4)) linking_fixed=$(round(linking_farkas_fixed, sigdigits=4))], lambda_norm=$(round(norm(lambda), sigdigits=4)), lambda_max=$(round(maximum(abs.(lambda)), sigdigits=4)), n_nonzero=$(n_nz)/$(length(lambda)), max_fix_vs_plan=$(round(max_fix_vs_plan_diff, sigdigits=3))"
+                # Log all nonzero-lambda variable names to identify repeated ray structure.
+                # Threshold raised to 50 (was 10) so the 20-nonzero case is always visible.
+                if n_nz <= 50
                     for i in eachindex(linking_variables_sub)
                         if abs(lambda[i]) > 1e-8
-                            pval = planning_sol.values[linking_variables_sub[i]]
-                            @info "  SPARSE_CUT var=$(linking_variables_sub[i]) λ=$(round(lambda[i],sigdigits=4)) x_plan=$(round(pval,sigdigits=4)) contrib=$(round(lambda[i]*pval,sigdigits=4))"
+                            pval  = planning_sol.values[linking_variables_sub[i]]
+                            fval  = x_fixed_vals[i]
+                            @info "  FARKAS_VAR var=$(linking_variables_sub[i]) λ=$(round(lambda[i],sigdigits=4)) x_plan=$(round(pval,sigdigits=4)) x_fixed=$(round(fval,sigdigits=4)) contrib_plan=$(round(lambda[i]*pval,sigdigits=4))"
                         end
                     end
                 end
@@ -365,7 +378,10 @@ function solve_local_subproblems(subproblem_local::Vector{Dict{Any,Any}},plannin
         m = sp[:model];
         linking_variables_sub = sp[:linking_variables_sub]
         w = sp[:subproblem_index];
-		local_sol[w] = solve_subproblem(m,planning_sol,linking_variables_sub,expect_feasible_subproblems,elastic_slack);
+        t_sp = @elapsed begin
+            local_sol[w] = solve_subproblem(m,planning_sol,linking_variables_sub,expect_feasible_subproblems,elastic_slack);
+        end
+        @info "Subproblem w=$(w): status=$(termination_status(m)) time=$(round(t_sp, digits=2))s theta_coeff=$(local_sol[w].theta_coeff)"
     end
     return local_sol
 end
