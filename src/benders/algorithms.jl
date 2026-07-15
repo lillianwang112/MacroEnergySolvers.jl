@@ -183,14 +183,18 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 	planning_sol_hist = [planning_sol.values[s] for s in planning_variables];
 
     #### Run Benders iterations
+    # Track all Farkas cuts to verify they are not violated by subsequent planning solutions.
+    # Each entry: (w, lambda vector, linking variable names, cert at generation time, k_added)
+    historical_farkas_cuts = NamedTuple{(:w, :lambda, :linking_vars, :cert, :k_added), Tuple{Any,Vector{Float64},Vector{String},Float64,Int}}[]
+
     for k = 0:MaxIter
-		
+
 		start_subop_sol = time();
 
 		planning_sol_hist = hcat(planning_sol_hist, [planning_sol.values[s] for s in planning_variables])
-		
+
         subop_sol = solve_subproblems(subproblems,planning_sol,expect_feasible_subproblems,elastic_slack);
-        
+
 		cpu_subop_sol = time()-start_subop_sol;
 		@info("Solving the subproblems required $(tidy_timing(cpu_subop_sol)) seconds")
 
@@ -206,6 +210,13 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 
 		update_planning_problem_multi_cuts!(planning_problem,subop_sol,planning_sol,linking_variables_sub,k)
 
+        # Record Farkas cuts added this iteration for cross-iteration violation checking.
+        for (w, sol) in subop_sol
+            if sol.theta_coeff == 0
+                push!(historical_farkas_cuts, (w=w, lambda=copy(sol.lambda), linking_vars=copy(linking_variables_sub[w]), cert=sol.op_cost, k_added=k))
+            end
+        end
+
 		time_planning_update = time()-time_start_update
 		@info("Done updating the planning problem. It took $(tidy_timing(time_planning_update)) seconds).")
 
@@ -215,6 +226,24 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 
 		cpu_planning_sol = time()-start_planning_sol;
 		@info("Solving the planning problem required $(tidy_timing(cpu_planning_sol)) seconds")
+
+        # Cross-iteration Farkas cut violation check.
+        # If a previously inserted cut sum(lambda^T * x) <= 0 is violated at the new
+        # planning solution, either the cut was inserted incorrectly or planning_sol
+        # does not reflect the master's actual solution — both are pipeline bugs.
+        n_cut_violations = 0
+        for cut in historical_farkas_cuts
+            lhs = sum(cut.lambda[i] * get(unst_planning_sol.values, cut.linking_vars[i], 0.0) for i in 1:length(cut.linking_vars))
+            if lhs > 1e-4
+                n_cut_violations += 1
+                @warn "FARKAS_CUT_VIOLATION: w=$(cut.w) k_added=$(cut.k_added) lambda^T*x_new=$(round(lhs,sigdigits=4)) > 0 (cut requires ≤ 0); cert_at_generation=$(round(cut.cert,sigdigits=4))"
+            end
+        end
+        if n_cut_violations == 0 && !isempty(historical_farkas_cuts)
+            @info "FARKAS_CUT_CHECK: all $(length(historical_farkas_cuts)) historical Farkas cuts satisfied at new planning_sol"
+        elseif n_cut_violations > 0
+            @warn "FARKAS_CUT_CHECK: $(n_cut_violations)/$(length(historical_farkas_cuts)) historical Farkas cuts VIOLATED at new planning_sol — pipeline bug suspected"
+        end
 
 		LB = max(LB,LBnew);
 		@info("The optimal value of the planning problem is $(obj_scale * LBnew) (scaled: $LBnew)")
