@@ -355,6 +355,13 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
             end
         end
 
+        # Per-cut causal split: log λᵀx at both unstabilized and stabilized candidates.
+        for cut in historical_farkas_cuts
+            lhs_unst = sum(cut.lambda[i] * get(unst_planning_sol.values, cut.linking_vars[i], 0.0) for i in 1:length(cut.linking_vars))
+            lhs_stab = sum(cut.lambda[i] * (haskey(planning_sol.values, cut.linking_vars[i]) ? planning_sol.values[cut.linking_vars[i]] : error("FARKAS_CAUSAL: missing $(cut.linking_vars[i])")) for i in 1:length(cut.linking_vars))
+            @info "FARKAS_CAUSAL: w=$(cut.w) k_added=$(cut.k_added) λᵀx_unst=$(round(lhs_unst,sigdigits=4)) λᵀx_stab=$(round(lhs_stab,sigdigits=4)) Δ=$(round(lhs_stab-lhs_unst,sigdigits=4))"
+        end
+
         # Cross-iteration Farkas cut violation check on stabilized planning_sol.
         n_cut_violations = 0
         for cut in historical_farkas_cuts
