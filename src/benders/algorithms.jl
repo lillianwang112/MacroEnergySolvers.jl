@@ -156,7 +156,7 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 		budget_group_rhs[key] = (vars, rhs)
 	end
 	n_budget_groups = length(budget_group_rhs)
-	n_budget_vars   = sum(length(v) for (v,_) in values(budget_group_rhs))
+	n_budget_vars   = sum((length(v) for (v,_) in values(budget_group_rhs)); init=0)
 	if n_budget_groups > 0
 		@info("Budget uniform override: detected $n_budget_vars Budget linking vars across $n_budget_groups groups. Will distribute uniformly to planning_sol while UB==Inf to prevent LP vertex concentration.")
 		# Apply uniform override to the initial planning_sol so the very first
