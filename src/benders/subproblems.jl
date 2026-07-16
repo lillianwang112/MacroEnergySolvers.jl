@@ -111,7 +111,120 @@ function fix_linking_variables!(m::Model,planning_sol::NamedTuple,linking_variab
 	end
 end
 
-function solve_subproblem(m::Model,planning_sol::NamedTuple,linking_variables_sub::Vector{String},expect_feasible_subproblems::Bool,elastic_slack::Bool=false)
+const PHASE1_ORACLE_AUDIT_DONE = Ref(false)
+
+function audit_phase1_at_oracle!(
+    m::Model,
+    planning_sol::NamedTuple,
+    linking_variables_sub::Vector{String},
+    op_cost::Real,
+    lambda::AbstractVector{<:Real},
+    subproblem_index,
+)
+    get(ENV, "BENDERS_PHASE1_ORACLE_AUDIT", "false") == "true" || return
+    PHASE1_ORACLE_AUDIT_DONE[] && return
+
+    if nprocs() > 1
+        @warn "PHASE1_ORACLE_AUDIT_SKIPPED: diagnostic must run serially (nprocs=$(nprocs())). Set Distributed=false."
+        return
+    end
+
+    min_objective = tryparse(Float64, get(ENV, "BENDERS_PHASE1_ORACLE_AUDIT_MIN_OBJECTIVE", "0"))
+    isnothing(min_objective) && error("BENDERS_PHASE1_ORACLE_AUDIT_MIN_OBJECTIVE must be numeric")
+    op_cost >= min_objective || return
+
+    oracle_path = get(ENV, "BENDERS_MONO_LINKING_VARS", "")
+    isempty(oracle_path) && error("BENDERS_PHASE1_ORACLE_AUDIT requires BENDERS_MONO_LINKING_VARS")
+    isfile(oracle_path) || error("BENDERS_MONO_LINKING_VARS does not exist: $oracle_path")
+
+    requested = Set(linking_variables_sub)
+    oracle_values = Dict{String,Float64}()
+    conflicting = Set{String}()
+    open(oracle_path) do io
+        eof(io) || readline(io) # header
+        for line in eachline(io)
+            idx = findlast(',', line)
+            isnothing(idx) && continue
+            variable_name = strip(line[1:idx-1])
+            variable_name in requested || continue
+            parsed_value = tryparse(Float64, strip(line[idx+1:end]))
+            isnothing(parsed_value) && continue
+            if haskey(oracle_values, variable_name) && !isapprox(
+                oracle_values[variable_name], parsed_value; rtol=1e-8, atol=1e-8
+            )
+                push!(conflicting, variable_name)
+            else
+                oracle_values[variable_name] = parsed_value
+            end
+        end
+    end
+
+    missing = filter(v -> !haskey(oracle_values, v), linking_variables_sub)
+    if !isempty(missing) || !isempty(conflicting)
+        missing_preview = join(first(missing, min(5, length(missing))), ", ")
+        conflict_preview = join(first(collect(conflicting), min(5, length(conflicting))), ", ")
+        @error "PHASE1_ORACLE_AUDIT_INDETERMINATE: w=$(subproblem_index) missing=$(length(missing)) conflicting=$(length(conflicting)) missing_preview=[$missing_preview] conflict_preview=[$conflict_preview]"
+        return
+    end
+
+    variables = VariableRef[]
+    for variable_name in linking_variables_sub
+        variable = variable_by_name(m, variable_name)
+        isnothing(variable) && error("PHASE1_ORACLE_AUDIT: linking variable $variable_name is absent from the subproblem")
+        push!(variables, variable)
+    end
+    generating_values = [fix_value(variable) for variable in variables]
+    planning_values = [planning_sol.values[name] for name in linking_variables_sub]
+    oracle_vector = [oracle_values[name] for name in linking_variables_sub]
+    max_generating_fix_difference = isempty(variables) ? 0.0 : maximum(abs.(generating_values .- planning_values))
+    cut_residual_oracle = op_cost + dot(lambda, oracle_vector .- generating_values)
+    cut_scale_oracle = max(
+        1.0,
+        abs(op_cost) + sum(abs(lambda[i] * (oracle_vector[i] - generating_values[i])) for i in eachindex(lambda)),
+    )
+
+    # Mark before optimizing so a failed audit cannot repeat indefinitely.
+    PHASE1_ORACLE_AUDIT_DONE[] = true
+    try
+        for i in eachindex(variables)
+            fix(variables[i], oracle_vector[i]; force=true)
+        end
+        maximum_abs_oracle_fixed_difference = isempty(variables) ? 0.0 : maximum(
+            abs(fix_value(variables[i]) - oracle_vector[i]) for i in eachindex(variables)
+        )
+
+        optimize!(m)
+        term = termination_status(m)
+        primal = primal_status(m)
+        dual_stat = dual_status(m)
+        raw = raw_status(m)
+        results = result_count(m)
+        values_available = has_values(m)
+        slack_at_oracle = values_available ? value(m[:slack_max]) : NaN
+        objective_at_oracle = values_available ? objective_value(m) : NaN
+
+        @info "PHASE1_ORACLE_AUDIT: w=$(subproblem_index) termination_status=$(term) primal_status=$(primal) dual_status=$(dual_stat) raw_status=$(repr(raw)) result_count=$(results) slack_max=$(slack_at_oracle) objective=$(objective_at_oracle) maximum_abs_master_fixed_difference=$(max_generating_fix_difference) maximum_abs_oracle_fixed_difference=$(maximum_abs_oracle_fixed_difference) cut_residual_oracle=$(cut_residual_oracle) normalized_cut_residual=$(cut_residual_oracle / cut_scale_oracle)"
+        if term == MOI.OPTIMAL && values_available && slack_at_oracle <= 1e-6
+            @info "PHASE1_ORACLE_AUDIT_VERDICT: MONOLITHIC_POINT_FEASIBLE — Phase-I reaches zero slack, so a positive cut residual at this point proves the fallback cut invalid."
+        elseif values_available
+            @warn "PHASE1_ORACLE_AUDIT_VERDICT: MONOLITHIC_POINT_REQUIRES_SLACK — decomposition/linking equivalence remains in question."
+        else
+            @warn "PHASE1_ORACLE_AUDIT_VERDICT: NO_PRIMAL_RESULT — audit is indeterminate."
+        end
+    catch err
+        @error "PHASE1_ORACLE_AUDIT_ERROR: w=$(subproblem_index) error=$(sprint(showerror, err))"
+    finally
+        for i in eachindex(variables)
+            fix(variables[i], generating_values[i]; force=true)
+        end
+        maximum_abs_restore_difference = isempty(variables) ? 0.0 : maximum(
+            abs(fix_value(variables[i]) - generating_values[i]) for i in eachindex(variables)
+        )
+        @info "PHASE1_ORACLE_AUDIT_RESTORE: w=$(subproblem_index) maximum_abs_restore_difference=$(maximum_abs_restore_difference)"
+    end
+end
+
+function solve_subproblem(m::Model,planning_sol::NamedTuple,linking_variables_sub::Vector{String},expect_feasible_subproblems::Bool,elastic_slack::Bool=false,subproblem_index=nothing)
 
     ### Solve the operational subproblem. If it is infeasible, compute feasibility cuts.
 
@@ -363,6 +476,8 @@ function solve_subproblem(m::Model,planning_sol::NamedTuple,linking_variables_su
             theta_coeff = 0;
             @info "Slack feasibility cut: op_cost=$(round(op_cost, sigdigits=4)), lambda_norm=$(round(norm(lambda), sigdigits=4)), lambda_max=$(round(maximum(abs.(lambda)), sigdigits=4)), n_nonzero=$(sum(abs.(lambda) .> 1e-8))/$(length(lambda))"
 
+            audit_phase1_at_oracle!(m, planning_sol, linking_variables_sub, op_cost, lambda, subproblem_index)
+
             try; set_attribute(m, "Crossover", 1); catch; end
             fix.(m[:slack_max], 0.0);
             @objective(m, Min, objfun)
@@ -382,7 +497,7 @@ function solve_local_subproblems(subproblem_local::Vector{Dict{Any,Any}},plannin
         linking_variables_sub = sp[:linking_variables_sub]
         w = sp[:subproblem_index];
         t_sp = @elapsed begin
-            local_sol[w] = solve_subproblem(m,planning_sol,linking_variables_sub,expect_feasible_subproblems,elastic_slack);
+            local_sol[w] = solve_subproblem(m,planning_sol,linking_variables_sub,expect_feasible_subproblems,elastic_slack,w);
         end
         @info "Subproblem w=$(w): status=$(termination_status(m)) time=$(round(t_sp, digits=2))s theta_coeff=$(local_sol[w].theta_coeff)"
     end
