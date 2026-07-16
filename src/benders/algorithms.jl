@@ -131,6 +131,7 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 	#### Initialize UB and LB
 	planning_sol, LB = solve_planning_problem(planning_problem,planning_variables);
 	budget_uniform_override = lowercase(strip(get(ENV, "BENDERS_BUDGET_UNIFORM_OVERRIDE", "true"))) in ("1", "true", "yes", "on")
+	oracle_seed_enabled = lowercase(strip(get(ENV, "BENDERS_ORACLE_SEED", "false"))) in ("1", "true", "yes", "on")
 
 	# Pre-compute Budget linking variable groups and their constraint RHS.
 	# Budget vars (names matching *_Budget_*[w]) are subject to sum==RHS equality constraints
@@ -202,9 +203,10 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
     # this includes Budget, storage-state, supply, and other non-capacity
     # linking variables.  Missing values are reported and never replaced by
     # zero because doing so can make an invalid cut appear valid.
-    mono_linking_values = Dict{String,Float64}()
-    mono_linking_path = get(ENV, "BENDERS_MONO_LINKING_VARS", "")
-    if !isempty(mono_linking_path)
+	mono_linking_values = Dict{String,Float64}()
+	mono_conflicting_values = Set{String}()
+	mono_linking_path = get(ENV, "BENDERS_MONO_LINKING_VARS", "")
+	if !isempty(mono_linking_path)
         isfile(mono_linking_path) || error("BENDERS_MONO_LINKING_VARS does not exist: $mono_linking_path")
         for (line_number, line) in enumerate(eachline(mono_linking_path))
             line_number == 1 && continue
@@ -215,12 +217,87 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
             variable_name = strip(line[1:idx-1])
             variable_value = tryparse(Float64, strip(line[idx+1:end]))
             isnothing(variable_value) && error("Invalid monolithic value on row $line_number: $line")
-            mono_linking_values[variable_name] = variable_value
-        end
-        @info "FEASIBILITY_CUT_ORACLE: loaded $(length(mono_linking_values)) monolithic variable values from $mono_linking_path"
-    end
+			if haskey(mono_linking_values, variable_name) && !isapprox(
+				mono_linking_values[variable_name], variable_value; rtol=1e-8, atol=1e-8
+			)
+				push!(mono_conflicting_values, variable_name)
+			else
+				mono_linking_values[variable_name] = variable_value
+			end
+		end
+		@info "FEASIBILITY_CUT_ORACLE: loaded $(length(mono_linking_values)) monolithic variable values from $mono_linking_path; conflicting_names=$(length(mono_conflicting_values))"
+	end
 
-    for k = 0:MaxIter
+	if oracle_seed_enabled
+		empty_seed_path_message = "BENDERS_ORACLE_SEED=true requires BENDERS_MONO_LINKING_VARS"
+		isempty(mono_linking_path) && error(empty_seed_path_message)
+
+		benders_only_names = Set(name.(planning_problem[:vTHETA]))
+		seed_variable_names = filter(name -> !(name in benders_only_names), planning_variables)
+		empty_names = filter(isempty, seed_variable_names)
+		isempty(empty_names) || error("ORACLE_SEED: planning model contains unnamed non-vTHETA variables")
+
+		missing_seed_variables = filter(name -> !haskey(mono_linking_values, name), seed_variable_names)
+		conflicting_seed_variables = filter(name -> name in mono_conflicting_values, seed_variable_names)
+		if !isempty(missing_seed_variables) || !isempty(conflicting_seed_variables)
+			missing_preview = join(first(missing_seed_variables, min(5, length(missing_seed_variables))), ", ")
+			conflict_preview = join(first(conflicting_seed_variables, min(5, length(conflicting_seed_variables))), ", ")
+			error("ORACLE_SEED mapping incomplete: missing=$(length(missing_seed_variables)) conflicting=$(length(conflicting_seed_variables)) missing_preview=[$missing_preview] conflict_preview=[$conflict_preview]")
+		end
+
+		seed_variables = [variable_by_name(planning_problem, name) for name in seed_variable_names]
+		any(isnothing, seed_variables) && error("ORACLE_SEED: a named planning variable could not be recovered with variable_by_name")
+		seed_variables = VariableRef[variable for variable in seed_variables]
+		original_fix_state = [(
+			variable=variable,
+			fixed=is_fixed(variable),
+			value=is_fixed(variable) ? fix_value(variable) : 0.0,
+			has_lower=has_lower_bound(variable),
+			lower=has_lower_bound(variable) ? lower_bound(variable) : 0.0,
+			has_upper=has_upper_bound(variable),
+			upper=has_upper_bound(variable) ? upper_bound(variable) : 0.0,
+		) for variable in seed_variables]
+
+		oracle_planning_sol = nothing
+		oracle_master_objective = NaN
+		try
+			for (variable, variable_name) in zip(seed_variables, seed_variable_names)
+				fix(variable, mono_linking_values[variable_name]; force=true)
+			end
+			oracle_planning_sol, oracle_master_objective = solve_planning_problem(planning_problem, planning_variables)
+		finally
+			for state in original_fix_state
+				if state.fixed
+					fix(state.variable, state.value; force=true)
+				else
+					unfix(state.variable)
+					state.has_lower && set_lower_bound(state.variable, state.lower)
+					state.has_upper && set_upper_bound(state.variable, state.upper)
+				end
+			end
+		end
+
+		max_oracle_master_difference = isempty(seed_variable_names) ? 0.0 : maximum(
+			abs(oracle_planning_sol.values[name] - mono_linking_values[name]) for name in seed_variable_names
+		)
+		max_oracle_master_difference <= 1e-6 || error("ORACLE_SEED: fixed planning solve differs from oracle by $(max_oracle_master_difference)")
+		@info "ORACLE_SEED_MASTER_VALID: variables=$(length(seed_variable_names)) planning_cost=$(oracle_planning_sol.planning_cost) master_objective=$(oracle_master_objective) max_fixed_difference=$(max_oracle_master_difference)"
+
+		oracle_subop_sol = solve_subproblems(subproblems, oracle_planning_sol, true, false)
+		infeasible_oracle_subproblems = [w for w in keys(oracle_subop_sol) if oracle_subop_sol[w].theta_coeff != 1]
+		isempty(infeasible_oracle_subproblems) || error("ORACLE_SEED: infeasible operational subproblems $(sort(infeasible_oracle_subproblems))")
+		oracle_ub = compute_upper_bound(planning_problem, oracle_planning_sol, oracle_subop_sol)
+		isfinite(oracle_ub) || error("ORACLE_SEED: failed to compute a finite upper bound")
+
+		planning_sol = oracle_planning_sol
+		planning_sol_best = deepcopy(oracle_planning_sol)
+		subop_sol_best = deepcopy(oracle_subop_sol)
+		UB = oracle_ub
+		planning_sol_hist = [planning_sol.values[s] for s in planning_variables]
+		@info "ORACLE_SEED_OPERATIONAL_VALID: subproblems=$(length(oracle_subop_sol)) planning_cost=$(oracle_planning_sol.planning_cost) operational_cost=$(sum(sol.op_cost for sol in values(oracle_subop_sol))) initial_UB=$(UB)"
+	end
+
+	for k = 0:MaxIter
 
 		start_subop_sol = time();
 
