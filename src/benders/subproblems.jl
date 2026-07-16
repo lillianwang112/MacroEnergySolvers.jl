@@ -113,6 +113,14 @@ end
 
 const PHASE1_ORACLE_AUDIT_DONE = Ref(false)
 
+function optimizer_attribute_or_missing(m::Model, attribute::String)
+    try
+        return get_attribute(m, attribute)
+    catch
+        return missing
+    end
+end
+
 function audit_phase1_at_oracle!(
     m::Model,
     planning_sol::NamedTuple,
@@ -177,15 +185,63 @@ function audit_phase1_at_oracle!(
     planning_values = [planning_sol.values[name] for name in linking_variables_sub]
     oracle_vector = [oracle_values[name] for name in linking_variables_sub]
     max_generating_fix_difference = isempty(variables) ? 0.0 : maximum(abs.(generating_values .- planning_values))
-    cut_residual_oracle = op_cost + dot(lambda, oracle_vector .- generating_values)
-    cut_scale_oracle = max(
+    barrier_cut_residual_oracle = op_cost + dot(lambda, oracle_vector .- generating_values)
+    barrier_cut_scale_oracle = max(
         1.0,
         abs(op_cost) + sum(abs(lambda[i] * (oracle_vector[i] - generating_values[i])) for i in eachindex(lambda)),
     )
 
+    # Snapshot the barrier/no-crossover Phase-I result before any diagnostic
+    # re-solve changes the model's result state.
+    barrier_term = termination_status(m)
+    barrier_primal = primal_status(m)
+    barrier_dual_status = dual_status(m)
+    barrier_raw = raw_status(m)
+    barrier_result_count = result_count(m)
+    barrier_dual_objective = try
+        dual_objective_value(m)
+    catch
+        NaN
+    end
+    barrier_constr_vio = optimizer_attribute_or_missing(m, "ConstrVio")
+    barrier_bound_vio = optimizer_attribute_or_missing(m, "BoundVio")
+    barrier_dual_vio = optimizer_attribute_or_missing(m, "DualVio")
+    barrier_compl_vio = optimizer_attribute_or_missing(m, "ComplVio")
+    original_method = optimizer_attribute_or_missing(m, "Method")
+    original_crossover = optimizer_attribute_or_missing(m, "Crossover")
+
     # Mark before optimizing so a failed audit cannot repeat indefinitely.
     PHASE1_ORACLE_AUDIT_DONE[] = true
     try
+        # Re-solve the identical generating-point Phase-I model with dual
+        # simplex.  This produces a directly comparable set of fixing duals
+        # without changing the cut returned by solve_subproblem.
+        set_attribute(m, "Method", 1)
+        optimize!(m)
+        simplex_term = termination_status(m)
+        simplex_primal = primal_status(m)
+        simplex_dual_status = dual_status(m)
+        simplex_raw = raw_status(m)
+        simplex_result_count = result_count(m)
+        simplex_values_available = has_values(m)
+        simplex_duals_available = has_duals(m)
+        simplex_objective = simplex_values_available ? objective_value(m) : NaN
+        simplex_dual_objective = simplex_duals_available ? dual_objective_value(m) : NaN
+        simplex_lambda = simplex_duals_available ? [dual(FixRef(variable)) for variable in variables] : fill(NaN, length(variables))
+        simplex_cut_residual_oracle = simplex_duals_available ? simplex_objective + dot(simplex_lambda, oracle_vector .- generating_values) : NaN
+        simplex_cut_scale_oracle = simplex_duals_available ? max(
+            1.0,
+            abs(simplex_objective) + sum(abs(simplex_lambda[i] * (oracle_vector[i] - generating_values[i])) for i in eachindex(simplex_lambda)),
+        ) : NaN
+        lambda_max_difference = simplex_duals_available && !isempty(lambda) ? maximum(abs.(simplex_lambda .- lambda)) : NaN
+        simplex_constr_vio = optimizer_attribute_or_missing(m, "ConstrVio")
+        simplex_bound_vio = optimizer_attribute_or_missing(m, "BoundVio")
+        simplex_dual_vio = optimizer_attribute_or_missing(m, "DualVio")
+        simplex_compl_vio = optimizer_attribute_or_missing(m, "ComplVio")
+
+        @info "PHASE1_DUAL_METHOD_BARRIER: w=$(subproblem_index) termination_status=$(barrier_term) primal_status=$(barrier_primal) dual_status=$(barrier_dual_status) raw_status=$(repr(barrier_raw)) result_count=$(barrier_result_count) primal_objective=$(op_cost) dual_objective=$(barrier_dual_objective) constr_vio=$(barrier_constr_vio) bound_vio=$(barrier_bound_vio) dual_vio=$(barrier_dual_vio) compl_vio=$(barrier_compl_vio) cut_residual_oracle=$(barrier_cut_residual_oracle) normalized_cut_residual=$(barrier_cut_residual_oracle / barrier_cut_scale_oracle)"
+        @info "PHASE1_DUAL_METHOD_SIMPLEX: w=$(subproblem_index) termination_status=$(simplex_term) primal_status=$(simplex_primal) dual_status=$(simplex_dual_status) raw_status=$(repr(simplex_raw)) result_count=$(simplex_result_count) primal_objective=$(simplex_objective) dual_objective=$(simplex_dual_objective) constr_vio=$(simplex_constr_vio) bound_vio=$(simplex_bound_vio) dual_vio=$(simplex_dual_vio) compl_vio=$(simplex_compl_vio) cut_residual_oracle=$(simplex_cut_residual_oracle) normalized_cut_residual=$(simplex_cut_residual_oracle / simplex_cut_scale_oracle) lambda_max_difference=$(lambda_max_difference)"
+
         for i in eachindex(variables)
             fix(variables[i], oracle_vector[i]; force=true)
         end
@@ -202,14 +258,29 @@ function audit_phase1_at_oracle!(
         values_available = has_values(m)
         slack_at_oracle = values_available ? value(m[:slack_max]) : NaN
         objective_at_oracle = values_available ? objective_value(m) : NaN
+        oracle_constr_vio = optimizer_attribute_or_missing(m, "ConstrVio")
+        oracle_bound_vio = optimizer_attribute_or_missing(m, "BoundVio")
+        oracle_dual_vio = optimizer_attribute_or_missing(m, "DualVio")
+        oracle_compl_vio = optimizer_attribute_or_missing(m, "ComplVio")
+        barrier_supporting_violation = values_available ? barrier_cut_residual_oracle - objective_at_oracle : NaN
+        simplex_supporting_violation = values_available ? simplex_cut_residual_oracle - objective_at_oracle : NaN
+        barrier_normalized_supporting_violation = values_available ? barrier_supporting_violation / max(1.0, abs(barrier_cut_residual_oracle), abs(objective_at_oracle)) : NaN
+        simplex_normalized_supporting_violation = values_available ? simplex_supporting_violation / max(1.0, abs(simplex_cut_residual_oracle), abs(objective_at_oracle)) : NaN
 
-        @info "PHASE1_ORACLE_AUDIT: w=$(subproblem_index) termination_status=$(term) primal_status=$(primal) dual_status=$(dual_stat) raw_status=$(repr(raw)) result_count=$(results) slack_max=$(slack_at_oracle) objective=$(objective_at_oracle) maximum_abs_master_fixed_difference=$(max_generating_fix_difference) maximum_abs_oracle_fixed_difference=$(maximum_abs_oracle_fixed_difference) cut_residual_oracle=$(cut_residual_oracle) normalized_cut_residual=$(cut_residual_oracle / cut_scale_oracle)"
-        if term == MOI.OPTIMAL && values_available && slack_at_oracle <= 1e-6
-            @info "PHASE1_ORACLE_AUDIT_VERDICT: MONOLITHIC_POINT_FEASIBLE — Phase-I reaches zero slack, so a positive cut residual at this point proves the fallback cut invalid."
-        elseif values_available
-            @warn "PHASE1_ORACLE_AUDIT_VERDICT: MONOLITHIC_POINT_REQUIRES_SLACK — decomposition/linking equivalence remains in question."
+        @info "PHASE1_ORACLE_AUDIT: w=$(subproblem_index) termination_status=$(term) primal_status=$(primal) dual_status=$(dual_stat) raw_status=$(repr(raw)) result_count=$(results) slack_max=$(slack_at_oracle) objective=$(objective_at_oracle) constr_vio=$(oracle_constr_vio) bound_vio=$(oracle_bound_vio) dual_vio=$(oracle_dual_vio) compl_vio=$(oracle_compl_vio) maximum_abs_master_fixed_difference=$(max_generating_fix_difference) maximum_abs_oracle_fixed_difference=$(maximum_abs_oracle_fixed_difference) barrier_cut_residual=$(barrier_cut_residual_oracle) barrier_supporting_violation=$(barrier_supporting_violation) barrier_normalized_supporting_violation=$(barrier_normalized_supporting_violation) simplex_cut_residual=$(simplex_cut_residual_oracle) simplex_supporting_violation=$(simplex_supporting_violation) simplex_normalized_supporting_violation=$(simplex_normalized_supporting_violation)"
+        if !values_available
+            @warn "PHASE1_ORACLE_AUDIT_BARRIER_INDETERMINATE: oracle Phase-I solve has no primal result."
+        elseif barrier_normalized_supporting_violation > 1e-8
+            @error "PHASE1_ORACLE_AUDIT_BARRIER_INVALID: barrier-derived cut exceeds the actual Phase-I value at the oracle point."
         else
-            @warn "PHASE1_ORACLE_AUDIT_VERDICT: NO_PRIMAL_RESULT — audit is indeterminate."
+            @info "PHASE1_ORACLE_AUDIT_BARRIER_VALID: barrier-derived cut satisfies the Phase-I supporting inequality at the oracle point."
+        end
+        if !values_available || !simplex_duals_available
+            @warn "PHASE1_ORACLE_AUDIT_SIMPLEX_INDETERMINATE: simplex generating solve lacks duals or oracle Phase-I solve lacks a primal result."
+        elseif simplex_normalized_supporting_violation > 1e-8
+            @error "PHASE1_ORACLE_AUDIT_SIMPLEX_INVALID: dual-simplex-derived cut exceeds the actual Phase-I value at the oracle point."
+        else
+            @info "PHASE1_ORACLE_AUDIT_SIMPLEX_VALID: dual-simplex-derived cut satisfies the Phase-I supporting inequality at the oracle point."
         end
     catch err
         @error "PHASE1_ORACLE_AUDIT_ERROR: w=$(subproblem_index) error=$(sprint(showerror, err))"
@@ -217,10 +288,12 @@ function audit_phase1_at_oracle!(
         for i in eachindex(variables)
             fix(variables[i], generating_values[i]; force=true)
         end
+        !ismissing(original_method) && set_attribute(m, "Method", original_method)
+        !ismissing(original_crossover) && set_attribute(m, "Crossover", original_crossover)
         maximum_abs_restore_difference = isempty(variables) ? 0.0 : maximum(
             abs(fix_value(variables[i]) - generating_values[i]) for i in eachindex(variables)
         )
-        @info "PHASE1_ORACLE_AUDIT_RESTORE: w=$(subproblem_index) maximum_abs_restore_difference=$(maximum_abs_restore_difference)"
+        @info "PHASE1_ORACLE_AUDIT_RESTORE: w=$(subproblem_index) maximum_abs_restore_difference=$(maximum_abs_restore_difference) restored_method=$(original_method) restored_crossover=$(original_crossover)"
     end
 end
 
