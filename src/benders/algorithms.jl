@@ -128,8 +128,9 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 		integer_routine_flag = true;
 	end
 
-    #### Initialize UB and LB
+	#### Initialize UB and LB
 	planning_sol, LB = solve_planning_problem(planning_problem,planning_variables);
+	budget_uniform_override = lowercase(strip(get(ENV, "BENDERS_BUDGET_UNIFORM_OVERRIDE", "true"))) in ("1", "true", "yes", "on")
 
 	# Pre-compute Budget linking variable groups and their constraint RHS.
 	# Budget vars (names matching *_Budget_*[w]) are subject to sum==RHS equality constraints
@@ -157,7 +158,7 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 	end
 	n_budget_groups = length(budget_group_rhs)
 	n_budget_vars   = sum((length(v) for (v,_) in values(budget_group_rhs)); init=0)
-	if n_budget_groups > 0
+	if n_budget_groups > 0 && budget_uniform_override
 		@info("Budget uniform override: detected $n_budget_vars Budget linking vars across $n_budget_groups groups. Will distribute uniformly to planning_sol while UB==Inf to prevent LP vertex concentration.")
 		# Apply uniform override to the initial planning_sol so the very first
 		# subproblem evaluation (k=0) also uses a balanced Budget.
@@ -168,6 +169,8 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 				planning_sol.values[y] = uniform_val
 			end
 		end
+	elseif n_budget_groups > 0
+		@info("Budget uniform override disabled by BENDERS_BUDGET_UNIFORM_OVERRIDE; subproblems will use the unmodified planning solution while UB==Inf.")
 	end
 
     UB = Inf;
@@ -350,11 +353,13 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 			# generated at the uniform x_bar are globally valid and carry strong Budget signal
 			# (lambda_Budget*(uniform - 0) >> FeasibilityTol), breaking the vertex cycling.
 			# LB is not affected — it comes from objective_value(m), not planning_sol.
-			for (_, (vars, rhs)) in budget_group_rhs
-				rhs <= 0 && continue
-				uniform_val = rhs / length(vars)
-				for y in vars
-					planning_sol.values[y] = uniform_val
+			if budget_uniform_override
+				for (_, (vars, rhs)) in budget_group_rhs
+					rhs <= 0 && continue
+					uniform_val = rhs / length(vars)
+					for y in vars
+						planning_sol.values[y] = uniform_val
+					end
 				end
 			end
 			# No finite UB yet — track most recent solution as best so the post-Benders
