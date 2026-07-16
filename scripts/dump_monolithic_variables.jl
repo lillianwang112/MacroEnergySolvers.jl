@@ -30,6 +30,10 @@ has_values(model) || error(
 )
 
 variables = filter(v -> !isempty(name(v)), all_variables(model))
+isempty(variables) && error(
+    "The solved model contains no named variables. Enable " *
+    "EnableJuMPStringNames in the case settings before generating the oracle.",
+)
 sort!(variables; by=name)
 
 mkpath(dirname(output_path))
