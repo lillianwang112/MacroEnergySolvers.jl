@@ -243,7 +243,10 @@ function solve_subproblem(m::Model,planning_sol::NamedTuple,linking_variables_su
                         if !isempty(lv_path) && isfile(lv_path)
                             lv_lines = readlines(lv_path)
                             for line in lv_lines[2:end]
-                                idx = findfirst(',', line)
+                                # JuMP array-variable names may contain commas;
+                                # dump_monolithic_variables.jl writes the value
+                                # after the final comma.
+                                idx = findlast(',', line)
                                 isnothing(idx) && continue
                                 vname = strip(line[1:idx-1])
                                 val = tryparse(Float64, strip(line[idx+1:end]))

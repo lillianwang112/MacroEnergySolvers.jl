@@ -183,9 +183,39 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 	planning_sol_hist = [planning_sol.values[s] for s in planning_variables];
 
     #### Run Benders iterations
-    # Track all Farkas cuts to verify they are not violated by subsequent planning solutions.
-    # Each entry: (w, lambda vector, linking variable names, cert at generation time, k_added)
-    historical_farkas_cuts = NamedTuple{(:w, :lambda, :linking_vars, :cert, :k_added), Tuple{Any,Vector{Float64},Vector{String},Float64,Int}}[]
+    # Track all feasibility cuts (direct Farkas and slack fallback) using the
+    # complete affine form added to the master:
+    #
+    #     alpha + lambda' * x <= 0,
+    #
+    # where alpha = op_cost - lambda' * x_generated.  Retaining alpha and the
+    # generating point is essential: checking only lambda' * x <= 0 drops the
+    # physical/constant term and can falsely report that a valid cut is
+    # violated whenever alpha is nonzero.
+    historical_feasibility_cuts = NamedTuple[]
+
+    # Optional complete monolithic oracle exported by
+    # scripts/dump_monolithic_variables.jl.  Unlike capacity.csv-only checks,
+    # this includes Budget, storage-state, supply, and other non-capacity
+    # linking variables.  Missing values are reported and never replaced by
+    # zero because doing so can make an invalid cut appear valid.
+    mono_linking_values = Dict{String,Float64}()
+    mono_linking_path = get(ENV, "BENDERS_MONO_LINKING_VARS", "")
+    if !isempty(mono_linking_path)
+        isfile(mono_linking_path) || error("BENDERS_MONO_LINKING_VARS does not exist: $mono_linking_path")
+        for (line_number, line) in enumerate(eachline(mono_linking_path))
+            line_number == 1 && continue
+            # JuMP array-variable names may contain commas; the value follows
+            # the final comma written by dump_monolithic_variables.jl.
+            idx = findlast(',', line)
+            isnothing(idx) && error("Malformed monolithic variable row $line_number: $line")
+            variable_name = strip(line[1:idx-1])
+            variable_value = tryparse(Float64, strip(line[idx+1:end]))
+            isnothing(variable_value) && error("Invalid monolithic value on row $line_number: $line")
+            mono_linking_values[variable_name] = variable_value
+        end
+        @info "FEASIBILITY_CUT_ORACLE: loaded $(length(mono_linking_values)) monolithic variable values from $mono_linking_path"
+    end
 
     for k = 0:MaxIter
 
@@ -210,10 +240,43 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 
 		update_planning_problem_multi_cuts!(planning_problem,subop_sol,planning_sol,linking_variables_sub,k)
 
-        # Record Farkas cuts added this iteration for cross-iteration violation checking.
+        # Record feasibility cuts added this iteration for exact
+        # cross-iteration residual checks.
         for (w, sol) in subop_sol
             if sol.theta_coeff == 0
-                push!(historical_farkas_cuts, (w=w, lambda=copy(sol.lambda), linking_vars=copy(linking_variables_sub[w]), cert=sol.op_cost, k_added=k))
+                linking_vars = copy(linking_variables_sub[w])
+                x_generated = [planning_sol.values[v] for v in linking_vars]
+                alpha = sol.op_cost - dot(sol.lambda, x_generated)
+                generating_residual = alpha + dot(sol.lambda, x_generated)
+                generating_scale = max(1.0, abs(alpha) + sum(abs(sol.lambda[i] * x_generated[i]) for i in eachindex(sol.lambda)))
+                generating_normalized_residual = generating_residual / generating_scale
+                push!(historical_feasibility_cuts, (
+                    w=w,
+                    lambda=copy(sol.lambda),
+                    linking_vars=linking_vars,
+                    op_cost=sol.op_cost,
+                    alpha=alpha,
+                    x_generated=x_generated,
+                    generating_residual=generating_residual,
+                    k_added=k,
+                ))
+                @info "FEASIBILITY_CUT_ADDED: w=$(w) k=$(k) alpha=$(round(alpha,sigdigits=6)) generating_residual=$(round(generating_residual,sigdigits=6)) normalized=$(round(generating_normalized_residual,sigdigits=6)) (must be > 0 to separate generating point)"
+                if !isempty(mono_linking_values)
+                    missing_variables = filter(v -> !haskey(mono_linking_values, v), linking_vars)
+                    if isempty(missing_variables)
+                        monolithic_terms = [sol.lambda[i] * mono_linking_values[linking_vars[i]] for i in eachindex(linking_vars)]
+                        monolithic_residual = alpha + sum(monolithic_terms)
+                        monolithic_normalized_residual = monolithic_residual / max(1.0, abs(alpha) + sum(abs, monolithic_terms))
+                        if monolithic_residual > 1e-4
+                            @error "FEASIBILITY_CUT_ORACLE_INVALID: w=$(w) k=$(k) residual_mono=$(round(monolithic_residual,sigdigits=6)) normalized=$(round(monolithic_normalized_residual,sigdigits=6)) > 0; cut excludes known feasible monolithic solution"
+                        else
+                            @info "FEASIBILITY_CUT_ORACLE_VALID: w=$(w) k=$(k) residual_mono=$(round(monolithic_residual,sigdigits=6)) normalized=$(round(monolithic_normalized_residual,sigdigits=6)) <= 0"
+                        end
+                    else
+                        preview = join(first(missing_variables, min(5, length(missing_variables))), ", ")
+                        @warn "FEASIBILITY_CUT_ORACLE_INCOMPLETE: w=$(w) k=$(k) missing $(length(missing_variables))/$(length(linking_vars)) linking variables; first missing: $preview"
+                    end
+                end
             end
         end
 
@@ -355,26 +418,34 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
             end
         end
 
-        # Per-cut causal split: log λᵀx at both unstabilized and stabilized candidates.
-        for cut in historical_farkas_cuts
-            lhs_unst = sum(cut.lambda[i] * get(unst_planning_sol.values, cut.linking_vars[i], 0.0) for i in 1:length(cut.linking_vars))
-            lhs_stab = sum(cut.lambda[i] * (haskey(planning_sol.values, cut.linking_vars[i]) ? planning_sol.values[cut.linking_vars[i]] : error("FARKAS_CAUSAL: missing $(cut.linking_vars[i])")) for i in 1:length(cut.linking_vars))
-            @info "FARKAS_CAUSAL: w=$(cut.w) k_added=$(cut.k_added) λᵀx_unst=$(round(lhs_unst,sigdigits=4)) λᵀx_stab=$(round(lhs_stab,sigdigits=4)) Δ=$(round(lhs_stab-lhs_unst,sigdigits=4))"
+        # Evaluate the complete feasibility-cut residual alpha + lambda' * x
+        # at both the master solution and the point actually sent to the
+        # subproblems.  A positive residual violates the cut.
+        for cut in historical_feasibility_cuts
+            terms_unst = [cut.lambda[i] * (haskey(unst_planning_sol.values, cut.linking_vars[i]) ? unst_planning_sol.values[cut.linking_vars[i]] : error("FEASIBILITY_CUT_CAUSAL: missing $(cut.linking_vars[i]) from unstabilized solution")) for i in eachindex(cut.linking_vars)]
+            terms_stab = [cut.lambda[i] * (haskey(planning_sol.values, cut.linking_vars[i]) ? planning_sol.values[cut.linking_vars[i]] : error("FEASIBILITY_CUT_CAUSAL: missing $(cut.linking_vars[i]) from stabilized solution")) for i in eachindex(cut.linking_vars)]
+            residual_unst = cut.alpha + sum(terms_unst)
+            residual_stab = cut.alpha + sum(terms_stab)
+            normalized_unst = residual_unst / max(1.0, abs(cut.alpha) + sum(abs, terms_unst))
+            normalized_stab = residual_stab / max(1.0, abs(cut.alpha) + sum(abs, terms_stab))
+            @info "FEASIBILITY_CUT_CAUSAL: w=$(cut.w) k_added=$(cut.k_added) residual_generated=$(round(cut.generating_residual,sigdigits=4)) residual_unst=$(round(residual_unst,sigdigits=4)) normalized_unst=$(round(normalized_unst,sigdigits=4)) residual_stab=$(round(residual_stab,sigdigits=4)) normalized_stab=$(round(normalized_stab,sigdigits=4)) Δstab=$(round(residual_stab-residual_unst,sigdigits=4))"
         end
 
-        # Cross-iteration Farkas cut violation check on stabilized planning_sol.
+        # Cross-iteration exact feasibility-cut check on the stabilized point.
         n_cut_violations = 0
-        for cut in historical_farkas_cuts
-            lhs = sum(cut.lambda[i] * (haskey(planning_sol.values, cut.linking_vars[i]) ? planning_sol.values[cut.linking_vars[i]] : error("FARKAS_CUT_CHECK: variable $(cut.linking_vars[i]) missing from planning_sol.values")) for i in 1:length(cut.linking_vars))
-            if lhs > 1e-4
+        for cut in historical_feasibility_cuts
+            terms = [cut.lambda[i] * (haskey(planning_sol.values, cut.linking_vars[i]) ? planning_sol.values[cut.linking_vars[i]] : error("FEASIBILITY_CUT_CHECK: variable $(cut.linking_vars[i]) missing from planning_sol.values")) for i in eachindex(cut.linking_vars)]
+            residual = cut.alpha + sum(terms)
+            normalized_residual = residual / max(1.0, abs(cut.alpha) + sum(abs, terms))
+            if residual > 1e-4
                 n_cut_violations += 1
-                @warn "FARKAS_CUT_VIOLATION: w=$(cut.w) k_added=$(cut.k_added) lambda^T*planning_sol=$(round(lhs,sigdigits=4)) > 0 (cut requires ≤ 0); cert=$(round(cut.cert,sigdigits=4))"
+                @warn "FEASIBILITY_CUT_VIOLATION: w=$(cut.w) k_added=$(cut.k_added) residual=$(round(residual,sigdigits=4)) normalized=$(round(normalized_residual,sigdigits=4)) > 0 (alpha + lambda^T*x must be ≤ 0); alpha=$(round(cut.alpha,sigdigits=4)) op_cost=$(round(cut.op_cost,sigdigits=4))"
             end
         end
-        if n_cut_violations == 0 && !isempty(historical_farkas_cuts)
-            @info "FARKAS_CUT_CHECK: all $(length(historical_farkas_cuts)) historical Farkas cuts satisfied at stabilized planning_sol"
+        if n_cut_violations == 0 && !isempty(historical_feasibility_cuts)
+            @info "FEASIBILITY_CUT_CHECK: all $(length(historical_feasibility_cuts)) historical feasibility cuts satisfied at stabilized planning_sol"
         elseif n_cut_violations > 0
-            @warn "FARKAS_CUT_CHECK: $(n_cut_violations)/$(length(historical_farkas_cuts)) historical Farkas cuts VIOLATED at stabilized planning_sol — stabilization moved solution outside feasible cone"
+            @warn "FEASIBILITY_CUT_CHECK: $(n_cut_violations)/$(length(historical_feasibility_cuts)) historical feasibility cuts VIOLATED at stabilized planning_sol"
         end
 
     end
