@@ -516,44 +516,52 @@ function solve_subproblem(m::Model,planning_sol::NamedTuple,linking_variables_su
             #### Feasibility cuts generation based on https://link.springer.com/chapter/10.1007/978-3-030-45771-6_7
 
             is_fixed(m[:slack_max]) && unfix(m[:slack_max])
-            objfun = objective_function(m);
+            objfun = objective_function(m)
             @objective(m, Min, m[:slack_max])
+            original_method = optimizer_attribute_or_missing(m, "Method")
+            original_crossover = optimizer_attribute_or_missing(m, "Crossover")
+            original_numeric_focus = optimizer_attribute_or_missing(m, "NumericFocus")
+            duality_tolerance = tryparse(Float64, get(ENV, "BENDERS_PHASE1_DUALITY_TOL", "1e-6"))
+            isnothing(duality_tolerance) && error("BENDERS_PHASE1_DUALITY_TOL must be numeric")
 
-            try; set_attribute(m, "Crossover", 0); catch; end
-            optimize!(m)
-            if !has_values(m)
-                try; set_attribute(m, "Crossover", 1); catch; end
-                optimize!(m)
-            end
-            if !has_values(m)
-                @warn "Feasibility subproblem has no solution after barrier retries. Retrying with NumericFocus=3 and simplex."
-                try; set_attribute(m, "NumericFocus", 3); catch; end
-                try; set_attribute(m, "Method", 1); catch; end
-                optimize!(m)
-            end
-            if !has_values(m)
-                compute_conflict!(m)
-                list_of_conflicting_constraints = ConstraintRef[];
-                for (F, S) in list_of_constraint_types(m)
-                    for con in all_constraints(m, F, S)
-                        if get_attribute(con, MOI.ConstraintConflictStatus()) == MOI.IN_CONFLICT
-                            push!(list_of_conflicting_constraints, con)
-                        end
-                    end
+            try
+                try
+                    set_attribute(m, "Method", 1)
+                catch err
+                    @warn "Phase-I solver does not accept Gurobi Method=1; using configured method. error=$(sprint(showerror, err))"
                 end
-                display(list_of_conflicting_constraints)
-                error("Feasibility subproblem is infeasible even with slack variables and NumericFocus=3. Check conflicting constraints above.")
+                optimize!(m)
+
+                term = termination_status(m)
+                primal = primal_status(m)
+                dual_stat = dual_status(m)
+                raw = raw_status(m)
+                results = result_count(m)
+                if term != MOI.OPTIMAL || !has_values(m) || !has_duals(m)
+                    error("Phase-I solve cannot generate a cut: termination=$(term) primal=$(primal) dual=$(dual_stat) raw=$(repr(raw)) result_count=$(results)")
+                end
+
+                op_cost = objective_value(m)
+                dual_objective = dual_objective_value(m)
+                relative_duality_gap = abs(op_cost - dual_objective) / max(1.0, abs(op_cost), abs(dual_objective))
+                @info "PHASE1_CUT_SOLVE: w=$(subproblem_index) method=dual_simplex termination_status=$(term) primal_status=$(primal) dual_status=$(dual_stat) raw_status=$(repr(raw)) result_count=$(results) primal_objective=$(op_cost) dual_objective=$(dual_objective) relative_duality_gap=$(relative_duality_gap) tolerance=$(duality_tolerance)"
+                if !isfinite(relative_duality_gap) || relative_duality_gap > duality_tolerance
+                    error("Phase-I primal/dual objective mismatch: relative_gap=$(relative_duality_gap) > tolerance=$(duality_tolerance). Refusing to generate an invalid feasibility cut.")
+                end
+
+                lambda = [dual(FixRef(variable_by_name(m,y))) for y in linking_variables_sub]
+                theta_coeff = 0
+                lambda_max = isempty(lambda) ? 0.0 : maximum(abs.(lambda))
+                @info "Slack feasibility cut: op_cost=$(round(op_cost, sigdigits=4)), lambda_norm=$(round(norm(lambda), sigdigits=4)), lambda_max=$(round(lambda_max, sigdigits=4)), n_nonzero=$(sum(abs.(lambda) .> 1e-8))/$(length(lambda))"
+
+                audit_phase1_at_oracle!(m, planning_sol, linking_variables_sub, op_cost, lambda, subproblem_index)
+            finally
+                fix.(m[:slack_max], 0.0; force=true)
+                set_objective_function(m, objfun)
+                !ismissing(original_method) && try; set_attribute(m, "Method", original_method); catch; end
+                !ismissing(original_crossover) && try; set_attribute(m, "Crossover", original_crossover); catch; end
+                !ismissing(original_numeric_focus) && try; set_attribute(m, "NumericFocus", original_numeric_focus); catch; end
             end
-            op_cost = objective_value(m);
-            lambda = [dual(FixRef(variable_by_name(m,y))) for y in linking_variables_sub];
-            theta_coeff = 0;
-            @info "Slack feasibility cut: op_cost=$(round(op_cost, sigdigits=4)), lambda_norm=$(round(norm(lambda), sigdigits=4)), lambda_max=$(round(maximum(abs.(lambda)), sigdigits=4)), n_nonzero=$(sum(abs.(lambda) .> 1e-8))/$(length(lambda))"
-
-            audit_phase1_at_oracle!(m, planning_sol, linking_variables_sub, op_cost, lambda, subproblem_index)
-
-            try; set_attribute(m, "Crossover", 1); catch; end
-            fix.(m[:slack_max], 0.0);
-            @objective(m, Min, objfun)
         end
 	end
 
