@@ -1,3 +1,26 @@
+function _oracle_seed_bound_violations(
+	variables,
+	variable_names::Vector{String},
+	values::AbstractDict{String,<:Real};
+	atol::Real=1e-8,
+)
+	violations = NamedTuple[]
+	for (variable, variable_name) in zip(variables, variable_names)
+		value = Float64(values[variable_name])
+		if is_fixed(variable) && !isapprox(value, fix_value(variable); atol=atol, rtol=0.0)
+			push!(violations, (name=variable_name, value=value, kind=:fixed, bound=fix_value(variable)))
+		elseif has_lower_bound(variable) && value < lower_bound(variable) - atol
+			push!(violations, (name=variable_name, value=value, kind=:lower, bound=lower_bound(variable)))
+		elseif has_upper_bound(variable) && value > upper_bound(variable) + atol
+			push!(violations, (name=variable_name, value=value, kind=:upper, bound=upper_bound(variable)))
+		end
+	end
+	return violations
+end
+
+_infer_nonnegative_linking_bound(variable_name::String) =
+	!startswith(variable_name, "vSTOR_CHANGE_") && !occursin("_Budget_", variable_name)
+
 """
 	benders(planning_problem::Model, 
 		subproblems::Union{Vector{Dict{Any, Any}}, DistributedArrays.DArray}, 
@@ -75,15 +98,16 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 		scale_subproblem_objectives!(subproblems, obj_scale)
 	end
 
-	# Enforce non-negativity on all linking variables except explicitly signed ones.
+	# Enforce non-negativity only on linking-variable families whose names imply
+	# a nonnegative physical quantity. Policy Budget variables must remain signed:
+	# annual net-policy constraints can allocate a negative budget to one
+	# representative period and a positive budget to another.
 	# Without this, the barrier solver exploits free directions (zero-cost variables with no
 	# lower bound) and proposes values like ±3e14, which destroys subproblem conditioning
 	# and produces garbage cuts (op_cost=0.00871, lambda_norm≈0) that never tighten LB.
-	# The only known signed linking variables are LongDurationStorage net-change terms
-	# (vSTOR_CHANGE_), which represent signed period-to-period storage deltas.  All other
-	# types (vCAP_, *_Budget_*, vNSD_, vSTOR_ state, vSUPPLY_) are physically ≥ 0.
+	# LongDurationStorage net-change terms (vSTOR_CHANGE_) are also signed.
 	all_linking_var_names = unique(vcat([linking_variables_sub[w] for w in keys(linking_variables_sub)]...))
-	non_neg_var_names = filter(y -> !startswith(y, "vSTOR_CHANGE_"), all_linking_var_names)
+	non_neg_var_names = filter(_infer_nonnegative_linking_bound, all_linking_var_names)
 	n_bounds_added = 0
 	for y in non_neg_var_names
 		v = variable_by_name(planning_problem, y)
@@ -92,7 +116,7 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 			n_bounds_added += 1
 		end
 	end
-	@info("Enforced lower bound ≥ 0 on $n_bounds_added/$(length(non_neg_var_names)) linking variables (of $(length(all_linking_var_names)) total; excluded $(length(all_linking_var_names)-length(non_neg_var_names)) vSTOR_CHANGE_ signed vars)")
+	@info("Enforced lower bound ≥ 0 on $n_bounds_added/$(length(non_neg_var_names)) inferred-nonnegative linking variables (of $(length(all_linking_var_names)) total; excluded $(length(all_linking_var_names)-length(non_neg_var_names)) signed Budget/vSTOR_CHANGE variables)")
 
 	add_approximate_variable_cost!(planning_problem,length(linking_variables_sub));
 
@@ -250,6 +274,18 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 		seed_variables = [variable_by_name(planning_problem, name) for name in seed_variable_names]
 		any(isnothing, seed_variables) && error("ORACLE_SEED: a named planning variable could not be recovered with variable_by_name")
 		seed_variables = VariableRef[variable for variable in seed_variables]
+		bound_violations = _oracle_seed_bound_violations(
+			seed_variables,
+			seed_variable_names,
+			mono_linking_values,
+		)
+		if !isempty(bound_violations)
+			preview = join(
+				("$(violation.name)=$(violation.value) violates $(violation.kind)=$(violation.bound)" for violation in first(bound_violations, min(5, length(bound_violations)))),
+				", ",
+			)
+			error("ORACLE_SEED: $(length(bound_violations)) monolithic values violate the current planning-model domain; refusing to hide the conflict with fix(...; force=true). First violations: $preview")
+		end
 		original_fix_state = [(
 			variable=variable,
 			fixed=is_fixed(variable),
