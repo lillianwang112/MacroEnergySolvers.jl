@@ -157,7 +157,9 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 	budget_uniform_override = lowercase(strip(get(ENV, "BENDERS_BUDGET_UNIFORM_OVERRIDE", "true"))) in ("1", "true", "yes", "on")
 	oracle_seed_enabled = lowercase(strip(get(ENV, "BENDERS_ORACLE_SEED", "false"))) in ("1", "true", "yes", "on")
 	levelset_proximal = lowercase(strip(get(ENV, "BENDERS_LEVELSET_PROXIMAL", "false"))) in ("1", "true", "yes", "on")
+	optimality_cut_audit = lowercase(strip(get(ENV, "BENDERS_OPTIMALITY_CUT_AUDIT", "false"))) in ("1", "true", "yes", "on")
 	levelset_proximal && @info("Incumbent-anchored level-set projection enabled by BENDERS_LEVELSET_PROXIMAL.")
+	optimality_cut_audit && @info("Optimality-cut master-movement audit enabled by BENDERS_OPTIMALITY_CUT_AUDIT.")
 
 	# Pre-compute Budget linking variable groups and their constraint RHS.
 	# Budget vars (names matching *_Budget_*[w]) are subject to sum==RHS equality constraints
@@ -223,6 +225,7 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
     # physical/constant term and can falsely report that a valid cut is
     # violated whenever alpha is nonzero.
     historical_feasibility_cuts = NamedTuple[]
+	historical_optimality_cuts = NamedTuple[]
 
     # Optional complete monolithic oracle exported by
     # scripts/dump_monolithic_variables.jl.  Unlike capacity.csv-only checks,
@@ -395,6 +398,23 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
                         @warn "FEASIBILITY_CUT_ORACLE_INCOMPLETE: w=$(w) k=$(k) missing $(length(missing_variables))/$(length(linking_vars)) linking variables; first missing: $preview"
                     end
                 end
+			elseif optimality_cut_audit
+				linking_vars = copy(linking_variables_sub[w])
+				x_generated = [planning_sol.values[v] for v in linking_vars]
+				alpha = sol.op_cost - dot(sol.lambda, x_generated)
+				lambda_norm = norm(sol.lambda)
+				lambda_max = isempty(sol.lambda) ? 0.0 : maximum(abs, sol.lambda)
+				n_nonzero = count(>(1e-8), abs.(sol.lambda))
+				push!(historical_optimality_cuts, (
+					w=w,
+					lambda=copy(sol.lambda),
+					linking_vars=linking_vars,
+					op_cost=sol.op_cost,
+					alpha=alpha,
+					x_generated=x_generated,
+					k_added=k,
+				))
+				@info "OPTIMALITY_CUT_ADDED: w=$(w) k=$(k) op_cost=$(round(sol.op_cost,sigdigits=7)) alpha=$(round(alpha,sigdigits=7)) lambda_norm=$(round(lambda_norm,sigdigits=7)) lambda_max=$(round(lambda_max,sigdigits=7)) n_nonzero=$(n_nonzero)/$(length(sol.lambda))"
             end
         end
 
@@ -413,6 +433,22 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 		n_nonzero = sum(abs(v) > 1e-6 for v in values(unst_planning_sol.values))
 		cap_vals = collect(values(unst_planning_sol.values))
 		@info "Planning solution summary: $(n_nonzero)/$(length(planning_variables)) variables non-zero, sum=$(round(sum(cap_vals), sigdigits=4)), max=$(round(maximum(cap_vals), sigdigits=4)), min=$(round(minimum(cap_vals), sigdigits=4))"
+
+		if optimality_cut_audit
+			theta_values = [value(v) for v in planning_problem[:vTHETA]]
+			@info "MASTER_OBJECTIVE_AUDIT: k=$(k) objective=$(round(LBnew,sigdigits=8)) planning_cost=$(round(unst_planning_sol.planning_cost,sigdigits=8)) theta_sum=$(round(sum(theta_values),sigdigits=8)) theta_values=$(round.(theta_values,sigdigits=7))"
+			for cut in historical_optimality_cuts
+				x_unst = [haskey(unst_planning_sol.values, v) ? unst_planning_sol.values[v] : error("OPTIMALITY_CUT_MASTER_AUDIT: missing $v") for v in cut.linking_vars]
+				delta_terms = cut.lambda .* (x_unst .- cut.x_generated)
+				rhs_unst = cut.op_cost + sum(delta_terms)
+				theta_unst = value(planning_problem[:vTHETA][cut.w])
+				cut_slack = theta_unst - rhs_unst
+				max_x_move = isempty(x_unst) ? 0.0 : maximum(abs.(x_unst .- cut.x_generated))
+				top_indices = sortperm(abs.(delta_terms), rev=true)[1:min(5, length(delta_terms))]
+				top_moves = join(("$(cut.linking_vars[i]):Δx=$(round(x_unst[i]-cut.x_generated[i],sigdigits=5)),λΔx=$(round(delta_terms[i],sigdigits=5))" for i in top_indices), "; ")
+				@info "OPTIMALITY_CUT_MASTER_AUDIT: w=$(cut.w) k_added=$(cut.k_added) k_solved=$(k) generated_rhs=$(round(cut.op_cost,sigdigits=7)) rhs_unst=$(round(rhs_unst,sigdigits=7)) theta_unst=$(round(theta_unst,sigdigits=7)) cut_slack=$(round(cut_slack,sigdigits=7)) max_abs_x_move=$(round(max_x_move,sigdigits=7)) top_moves=[$top_moves]"
+			end
+		end
 
 		running_gap = (UB-LB)/abs(LB)
 
@@ -539,6 +575,14 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
         # Post-stabilization diagnostics: planning_sol is now the actual point sent to subproblems.
         stab_max_diff = isempty(unst_planning_sol.values) ? 0.0 : maximum(abs(get(planning_sol.values, vk, 0.0) - get(unst_planning_sol.values, vk, 0.0)) for vk in keys(unst_planning_sol.values))
         @info "STAB_DIFF: max|planning_sol - unst_planning_sol| = $(round(stab_max_diff, sigdigits=4))"
+
+		if optimality_cut_audit
+			for cut in historical_optimality_cuts
+				x_stab = [haskey(planning_sol.values, v) ? planning_sol.values[v] : error("OPTIMALITY_CUT_STABILIZED_AUDIT: missing $v") for v in cut.linking_vars]
+				rhs_stab = cut.op_cost + dot(cut.lambda, x_stab .- cut.x_generated)
+				@info "OPTIMALITY_CUT_STABILIZED_AUDIT: w=$(cut.w) k_added=$(cut.k_added) k_solved=$(k) rhs_stab=$(round(rhs_stab,sigdigits=7)) max_abs_x_move=$(round(maximum(abs.(x_stab .- cut.x_generated)),sigdigits=7))"
+			end
+		end
 
         # Log aggregate vSTOR_CHANGE sums for hydro assets at both candidates.
         hydro_keys = filter(v -> contains(v, "vSTOR_CHANGE") && contains(v, "hydroelectric"), collect(keys(unst_planning_sol.values)))
