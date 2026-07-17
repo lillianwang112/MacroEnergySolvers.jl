@@ -18,8 +18,21 @@ function _oracle_seed_bound_violations(
 	return violations
 end
 
-_infer_nonnegative_linking_bound(variable_name::String) =
-	!startswith(variable_name, "vSTOR_CHANGE_") && !occursin("_Budget_", variable_name)
+function _infer_nonnegative_linking_bound(variable_name::String)
+	startswith(variable_name, "vSTOR_CHANGE_") && return false
+
+	# CO2-cap budgets represent net emissions and may legitimately be signed.
+	# CO2-storage budgets, however, bound a nonnegative amount of injected CO2 in
+	# each representative subperiod.  Leaving them free lets the planning master
+	# allocate a large negative storage budget to one subperiod (offset by a
+	# positive allocation elsewhere), which makes that operational subproblem
+	# infeasible by construction.
+	if occursin("_Budget_", variable_name)
+		return startswith(variable_name, "vCO2StorageConstraint_Budget_")
+	end
+
+	return true
+end
 
 """
 	benders(planning_problem::Model, 
@@ -99,9 +112,9 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 	end
 
 	# Enforce non-negativity only on linking-variable families whose names imply
-	# a nonnegative physical quantity. Policy Budget variables must remain signed:
-	# annual net-policy constraints can allocate a negative budget to one
-	# representative period and a positive budget to another.
+	# a nonnegative physical quantity. Net-policy Budget variables remain signed,
+	# while CO2StorageConstraint budgets are nonnegative because they bound a
+	# nonnegative amount of injected CO2 in each representative subperiod.
 	# Without this, the barrier solver exploits free directions (zero-cost variables with no
 	# lower bound) and proposes values like ±3e14, which destroys subproblem conditioning
 	# and produces garbage cuts (op_cost=0.00871, lambda_norm≈0) that never tighten LB.
@@ -116,7 +129,7 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 			n_bounds_added += 1
 		end
 	end
-	@info("Enforced lower bound ≥ 0 on $n_bounds_added/$(length(non_neg_var_names)) inferred-nonnegative linking variables (of $(length(all_linking_var_names)) total; excluded $(length(all_linking_var_names)-length(non_neg_var_names)) signed Budget/vSTOR_CHANGE variables)")
+	@info("Enforced lower bound ≥ 0 on $n_bounds_added/$(length(non_neg_var_names)) inferred-nonnegative linking variables (of $(length(all_linking_var_names)) total; signed net-policy Budget/vSTOR_CHANGE variables remain free)")
 
 	add_approximate_variable_cost!(planning_problem,length(linking_variables_sub));
 

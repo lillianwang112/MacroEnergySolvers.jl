@@ -53,7 +53,7 @@ using JuMP
         @test !MacroEnergySolvers._infer_nonnegative_linking_bound(
             "vCO2CapConstraint_Budget_CO2_period1[7]",
         )
-        @test !MacroEnergySolvers._infer_nonnegative_linking_bound(
+        @test MacroEnergySolvers._infer_nonnegative_linking_bound(
             "vCO2StorageConstraint_Budget_co2_storage_SE_1_period1[18]",
         )
         @test !MacroEnergySolvers._infer_nonnegative_linking_bound(
