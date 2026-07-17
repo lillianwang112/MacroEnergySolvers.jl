@@ -132,6 +132,8 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 	planning_sol, LB = solve_planning_problem(planning_problem,planning_variables);
 	budget_uniform_override = lowercase(strip(get(ENV, "BENDERS_BUDGET_UNIFORM_OVERRIDE", "true"))) in ("1", "true", "yes", "on")
 	oracle_seed_enabled = lowercase(strip(get(ENV, "BENDERS_ORACLE_SEED", "false"))) in ("1", "true", "yes", "on")
+	levelset_proximal = lowercase(strip(get(ENV, "BENDERS_LEVELSET_PROXIMAL", "false"))) in ("1", "true", "yes", "on")
+	levelset_proximal && @info("Incumbent-anchored level-set projection enabled by BENDERS_LEVELSET_PROXIMAL.")
 
 	# Pre-compute Budget linking variable groups and their constraint RHS.
 	# Budget vars (names matching *_Budget_*[w]) are subject to sum==RHS equality constraints
@@ -461,7 +463,16 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 						fix(v,unst_planning_sol.values[name(v)];force=true)
 					end
                     @info("Solving the interior level set problem with γ = $γ")
-					planning_sol = solve_int_level_set_problem(planning_problem,planning_variables,unst_planning_sol,LB,UB,γ);
+					planning_sol = solve_int_level_set_problem(
+						planning_problem,
+						planning_variables,
+						unst_planning_sol,
+						LB,
+						UB,
+						γ;
+						incumbent_sol=planning_sol_best,
+						proximal=levelset_proximal,
+					);
 					unfix.(integer_variables)
 					unfix.(binary_variables)
 					set_integer.(integer_variables)
@@ -470,7 +481,16 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 					set_lower_bound.(binary_variables,0.0)
 				else
                     @info("Solving the interior level set problem with γ = $γ")
-					planning_sol = solve_int_level_set_problem(planning_problem,planning_variables,unst_planning_sol,LB,UB,γ);
+					planning_sol = solve_int_level_set_problem(
+						planning_problem,
+						planning_variables,
+						unst_planning_sol,
+						LB,
+						UB,
+						γ;
+						incumbent_sol=planning_sol_best,
+						proximal=levelset_proximal,
+					);
 				end
 				cpu_stab_method = time()-start_stab_method;
 				@info("Solving the interior level set problem required $(tidy_timing(cpu_stab_method)) seconds")

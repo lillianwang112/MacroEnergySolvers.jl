@@ -4,7 +4,9 @@
 		planning_sol::NamedTuple, 
 		LB, 
 		UB, 
-		γ
+		γ;
+		incumbent_sol::Union{Nothing,NamedTuple}=nothing,
+		proximal::Bool=false
 	)
 
 Solves the interior level set stabilization problem for the regularized Benders decomposition algorithm.
@@ -20,12 +22,27 @@ stabilization parameter γ.
 - `LB`: Current lower bound
 - `UB`: Current upper bound
 - `γ`: Stabilization parameter controlling the size of the level set (0 ≤ γ ≤ 1)
+- `incumbent_sol`: Optional feasible incumbent used as the center of the proximal diagnostic
+- `proximal`: If true, minimize scaled squared distance from `incumbent_sol` instead of
+  using the legacy zero objective
 
 # Returns
 A NamedTuple containing the solution of the stabilized problem with the same structure as the input `planning_sol`
 
 """
-function solve_int_level_set_problem(m::Model,planning_variables::Vector{String},planning_sol::NamedTuple,LB,UB,γ)
+_level_set_proximal_scale(incumbent_value, raw_value) =
+	max(1.0, abs(Float64(incumbent_value)), abs(Float64(raw_value)))
+
+function solve_int_level_set_problem(
+	m::Model,
+	planning_variables::Vector{String},
+	planning_sol::NamedTuple,
+	LB,
+	UB,
+	γ;
+	incumbent_sol::Union{Nothing,NamedTuple}=nothing,
+	proximal::Bool=false,
+)
 	
 	### Interior point regularization based on https://ieeexplore.ieee.org/document/10829583
 
@@ -33,7 +50,34 @@ function solve_int_level_set_problem(m::Model,planning_variables::Vector{String}
 
 	@constraint(m,cLevel_set, objfun <=LB+γ*(UB-LB))
 
-	@objective(m, Min, 0*sum(m[:vTHETA][1]))
+	proximal_variables = String[]
+	proximal_scales = Dict{String,Float64}()
+	if proximal
+		isnothing(incumbent_sol) && error("BENDERS_LEVELSET_PROXIMAL=true requires a finite incumbent solution")
+		for variable_name in planning_variables
+			startswith(variable_name, "vTHETA") && continue
+			haskey(planning_sol.values, variable_name) || error("LEVELSET_PROXIMAL: raw planning solution is missing $variable_name")
+			haskey(incumbent_sol.values, variable_name) || error("LEVELSET_PROXIMAL: incumbent solution is missing $variable_name")
+			isnothing(variable_by_name(m, variable_name)) && error("LEVELSET_PROXIMAL: planning model is missing $variable_name")
+			push!(proximal_variables, variable_name)
+			proximal_scales[variable_name] = _level_set_proximal_scale(
+				incumbent_sol.values[variable_name],
+				planning_sol.values[variable_name],
+			)
+		end
+		isempty(proximal_variables) && error("LEVELSET_PROXIMAL: no non-vTHETA planning variables were found")
+		@objective(
+			m,
+			Min,
+			sum(
+				((variable_by_name(m, variable_name) - incumbent_sol.values[variable_name]) /
+				 proximal_scales[variable_name])^2
+				for variable_name in proximal_variables
+			),
+		)
+	else
+		@objective(m, Min, 0*sum(m[:vTHETA][1]))
+	end
 
     optimize!(m)
 
@@ -42,6 +86,19 @@ function solve_int_level_set_problem(m::Model,planning_variables::Vector{String}
 		planning_cost,variable_values = process_planning_sol(m,planning_variables)
 
 		planning_sol = (;planning_sol..., planning_cost = planning_cost, values = variable_values)
+
+		if proximal
+			normalized_squared_distance = sum(
+				((planning_sol.values[variable_name] - incumbent_sol.values[variable_name]) /
+				 proximal_scales[variable_name])^2
+				for variable_name in proximal_variables
+			)
+			max_abs_incumbent_difference = maximum(
+				abs(planning_sol.values[variable_name] - incumbent_sol.values[variable_name])
+				for variable_name in proximal_variables
+			)
+			@info "LEVELSET_PROXIMAL_SOLVED: variables=$(length(proximal_variables)) normalized_squared_distance=$(normalized_squared_distance) max_abs_incumbent_difference=$(max_abs_incumbent_difference)"
+		end
 		
 	else
 
