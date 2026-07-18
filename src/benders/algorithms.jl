@@ -157,6 +157,43 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 	planning_variables_ref = all_variables(planning_problem);
 	planning_variables = name.(planning_variables_ref);
 
+	# Optional, durable feasibility-cut checkpointing. Each cut is stored as a
+	# complete affine inequality keyed by planning-variable name. Replay occurs
+	# before the first master solve so the reconstructed lower bound can be
+	# compared with the last atomically saved master state.
+	checkpoint_config = _feasibility_cut_checkpoint_config()
+	replayed_feasibility_cuts = NamedTuple[]
+	checkpoint_state = nothing
+	if checkpoint_config.replay
+		replayed_feasibility_cuts = _load_feasibility_cut_checkpoints(
+			checkpoint_config.directory,
+		)
+		isempty(replayed_feasibility_cuts) && error(
+			"BENDERS_FEASIBILITY_CUT_REPLAY=true but no complete cut checkpoints " *
+			"were found in $(checkpoint_config.directory)",
+		)
+		_add_replayed_feasibility_cuts!(planning_problem, replayed_feasibility_cuts)
+		checkpoint_state = _read_feasibility_checkpoint_state(
+			checkpoint_config.directory,
+		)
+		@info "FEASIBILITY_CUT_REPLAY_LOADED: cuts=$(length(replayed_feasibility_cuts)) directory=$(checkpoint_config.directory)"
+	elseif checkpoint_config.write
+		mkpath(checkpoint_config.directory)
+		existing_checkpoint_files = _feasibility_cut_checkpoint_files(
+			checkpoint_config.directory,
+		)
+		isempty(existing_checkpoint_files) || error(
+			"Checkpoint directory already contains $(length(existing_checkpoint_files)) " *
+			"complete cuts. Set BENDERS_FEASIBILITY_CUT_REPLAY=true to continue it, " *
+			"or use an empty directory: $(checkpoint_config.directory)",
+		)
+	end
+	checkpoint_next_id = isempty(replayed_feasibility_cuts) ?
+		1 : maximum(cut.checkpoint_id for cut in replayed_feasibility_cuts) + 1
+	checkpoint_exact_feasibility_phase = true
+	historical_feasibility_cuts = NamedTuple[replayed_feasibility_cuts...]
+	historical_optimality_cuts = NamedTuple[]
+
 	if integer_investment == 1 && stab_method != "off"
 		integer_variables = planning_variables_ref[is_integer.(planning_variables_ref)];
 		binary_variables = planning_variables_ref[is_binary.(planning_variables_ref)];
@@ -167,10 +204,34 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 
 	#### Initialize UB and LB
 	planning_sol, LB = solve_planning_problem(planning_problem,planning_variables);
+	if checkpoint_config.replay
+		if isnothing(checkpoint_state)
+			@warn "FEASIBILITY_CUT_REPLAY_UNVERIFIED: no master_state.tsv was found; replayed master objective=$(LB)"
+		elseif checkpoint_state.cut_count != length(replayed_feasibility_cuts)
+			@warn "FEASIBILITY_CUT_REPLAY_UNVERIFIED: state cut_count=$(checkpoint_state.cut_count) differs from replayed cuts=$(length(replayed_feasibility_cuts)); replayed master objective=$(LB)"
+		else
+			objective_difference = abs(LB - checkpoint_state.master_objective)
+			isapprox(
+				LB,
+				checkpoint_state.master_objective;
+				atol=1e-4,
+				rtol=1e-9,
+			) || error(
+				"FEASIBILITY_CUT_REPLAY_MASTER_MISMATCH: replayed objective=$LB " *
+				"saved objective=$(checkpoint_state.master_objective) " *
+				"difference=$objective_difference",
+			)
+			@info "FEASIBILITY_CUT_REPLAY_MASTER_VALID: cuts=$(length(replayed_feasibility_cuts)) replayed_objective=$(LB) saved_objective=$(checkpoint_state.master_objective) difference=$(objective_difference)"
+		end
+	end
 	budget_uniform_override = lowercase(strip(get(ENV, "BENDERS_BUDGET_UNIFORM_OVERRIDE", "true"))) in ("1", "true", "yes", "on")
 	oracle_seed_enabled = lowercase(strip(get(ENV, "BENDERS_ORACLE_SEED", "false"))) in ("1", "true", "yes", "on")
 	levelset_proximal = lowercase(strip(get(ENV, "BENDERS_LEVELSET_PROXIMAL", "false"))) in ("1", "true", "yes", "on")
 	optimality_cut_audit = lowercase(strip(get(ENV, "BENDERS_OPTIMALITY_CUT_AUDIT", "false"))) in ("1", "true", "yes", "on")
+	feasibility_cut_causal_audit = _checkpoint_env_flag(
+		"BENDERS_FEASIBILITY_CUT_CAUSAL_AUDIT",
+		true,
+	)
 	levelset_proximal && @info("Incumbent-anchored level-set projection enabled by BENDERS_LEVELSET_PROXIMAL.")
 	optimality_cut_audit && @info("Optimality-cut master-movement audit enabled by BENDERS_OPTIMALITY_CUT_AUDIT.")
 
@@ -228,7 +289,7 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 	planning_sol_hist = [planning_sol.values[s] for s in planning_variables];
 
     #### Run Benders iterations
-    # Track all feasibility cuts (direct Farkas and slack fallback) using the
+	# Track all feasibility cuts (direct Farkas and slack fallback) using the
     # complete affine form added to the master:
     #
     #     alpha + lambda' * x <= 0,
@@ -237,8 +298,7 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
     # generating point is essential: checking only lambda' * x <= 0 drops the
     # physical/constant term and can falsely report that a valid cut is
     # violated whenever alpha is nonzero.
-    historical_feasibility_cuts = NamedTuple[]
-	historical_optimality_cuts = NamedTuple[]
+	# Replayed cuts, if any, were inserted above before the first master solve.
 
     # Optional complete monolithic oracle exported by
     # scripts/dump_monolithic_variables.jl.  Unlike capacity.csv-only checks,
@@ -268,6 +328,28 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 			end
 		end
 		@info "FEASIBILITY_CUT_ORACLE: loaded $(length(mono_linking_values)) monolithic variable values from $mono_linking_path; conflicting_names=$(length(mono_conflicting_values))"
+		for cut in replayed_feasibility_cuts
+			missing_variables = filter(
+				variable_name -> !haskey(mono_linking_values, variable_name),
+				cut.linking_vars,
+			)
+			isempty(missing_variables) || error(
+				"FEASIBILITY_CUT_REPLAY_ORACLE_INCOMPLETE: checkpoint_id=$(cut.checkpoint_id) " *
+				"missing=$(length(missing_variables))",
+			)
+			terms = [
+				cut.lambda[i] * mono_linking_values[cut.linking_vars[i]]
+				for i in eachindex(cut.linking_vars)
+			]
+			oracle_residual = cut.alpha + sum(terms)
+			oracle_normalized_residual = oracle_residual /
+				max(1.0, abs(cut.alpha) + sum(abs, terms))
+			oracle_residual <= 1e-4 || error(
+				"FEASIBILITY_CUT_REPLAY_ORACLE_INVALID: checkpoint_id=$(cut.checkpoint_id) " *
+				"residual=$oracle_residual normalized=$oracle_normalized_residual",
+			)
+			@info "FEASIBILITY_CUT_REPLAY_ORACLE_VALID: checkpoint_id=$(cut.checkpoint_id) residual_mono=$(round(oracle_residual,sigdigits=6)) normalized=$(round(oracle_normalized_residual,sigdigits=6))"
+		end
 	end
 
 	if oracle_seed_enabled
@@ -361,6 +443,12 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 
 		cpu_subop_sol = time()-start_subop_sol;
 		@info("Solving the subproblems required $(tidy_timing(cpu_subop_sol)) seconds")
+		phase1_objectives = [
+			sol.op_cost for sol in values(subop_sol) if sol.theta_coeff == 0
+		]
+		if !isempty(phase1_objectives)
+			@info "PHASE1_ITERATION_SUMMARY: k=$(k) infeasible=$(length(phase1_objectives))/$(length(subop_sol)) min=$(minimum(phase1_objectives)) max=$(maximum(phase1_objectives)) sum=$(sum(phase1_objectives))"
+		end
 
 		UBnew = compute_upper_bound(planning_problem,planning_sol,subop_sol);
 		if UBnew < UB
@@ -384,7 +472,7 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
                 generating_residual = alpha + dot(sol.lambda, x_generated)
                 generating_scale = max(1.0, abs(alpha) + sum(abs(sol.lambda[i] * x_generated[i]) for i in eachindex(sol.lambda)))
                 generating_normalized_residual = generating_residual / generating_scale
-                push!(historical_feasibility_cuts, (
+                cut = (
                     w=w,
                     lambda=copy(sol.lambda),
                     linking_vars=linking_vars,
@@ -393,7 +481,17 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
                     x_generated=x_generated,
                     generating_residual=generating_residual,
                     k_added=k,
-                ))
+				)
+				push!(historical_feasibility_cuts, cut)
+				if checkpoint_config.write
+					checkpoint_path = _write_feasibility_cut_checkpoint(
+						checkpoint_config.directory,
+						checkpoint_next_id,
+						cut,
+					)
+					@info "FEASIBILITY_CUT_CHECKPOINT_WRITTEN: checkpoint_id=$(checkpoint_next_id) w=$(w) k=$(k) path=$(checkpoint_path)"
+					checkpoint_next_id += 1
+				end
                 @info "FEASIBILITY_CUT_ADDED: w=$(w) k=$(k) alpha=$(round(alpha,sigdigits=6)) generating_residual=$(round(generating_residual,sigdigits=6)) normalized=$(round(generating_normalized_residual,sigdigits=6)) (must be > 0 to separate generating point)"
                 if !isempty(mono_linking_values)
                     missing_variables = filter(v -> !haskey(mono_linking_values, v), linking_vars)
@@ -430,6 +528,9 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 				@info "OPTIMALITY_CUT_ADDED: w=$(w) k=$(k) op_cost=$(round(sol.op_cost,sigdigits=7)) alpha=$(round(alpha,sigdigits=7)) lambda_norm=$(round(lambda_norm,sigdigits=7)) lambda_max=$(round(lambda_max,sigdigits=7)) n_nonzero=$(n_nonzero)/$(length(sol.lambda))"
             end
         end
+		if any(sol.theta_coeff == 1 for sol in values(subop_sol))
+			checkpoint_exact_feasibility_phase = false
+		end
 
 		time_planning_update = time()-time_start_update
 		@info("Done updating the planning problem. It took $(tidy_timing(time_planning_update)) seconds).")
@@ -437,6 +538,16 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 		start_planning_sol = time()
 
 		unst_planning_sol, LBnew = solve_planning_problem(planning_problem,planning_variables);
+		if checkpoint_config.write && checkpoint_exact_feasibility_phase
+			state_path = _write_feasibility_checkpoint_state(
+				checkpoint_config.directory,
+				checkpoint_next_id - 1,
+				LBnew,
+			)
+			@info "FEASIBILITY_CUT_CHECKPOINT_STATE: cuts=$(checkpoint_next_id - 1) master_objective=$(LBnew) path=$(state_path)"
+		elseif checkpoint_config.write
+			@info "FEASIBILITY_CUT_CHECKPOINT_STATE_SKIPPED: an optimality cut was generated, so feasibility-only replay no longer reproduces the complete master"
+		end
 
 		cpu_planning_sol = time()-start_planning_sol;
 		@info("Solving the planning problem required $(tidy_timing(cpu_planning_sol)) seconds")
@@ -616,7 +727,8 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
         # Evaluate the complete feasibility-cut residual alpha + lambda' * x
         # at both the master solution and the point actually sent to the
         # subproblems.  A positive residual violates the cut.
-        for cut in historical_feasibility_cuts
+        if feasibility_cut_causal_audit
+		for cut in historical_feasibility_cuts
             terms_unst = [cut.lambda[i] * (haskey(unst_planning_sol.values, cut.linking_vars[i]) ? unst_planning_sol.values[cut.linking_vars[i]] : error("FEASIBILITY_CUT_CAUSAL: missing $(cut.linking_vars[i]) from unstabilized solution")) for i in eachindex(cut.linking_vars)]
             terms_stab = [cut.lambda[i] * (haskey(planning_sol.values, cut.linking_vars[i]) ? planning_sol.values[cut.linking_vars[i]] : error("FEASIBILITY_CUT_CAUSAL: missing $(cut.linking_vars[i]) from stabilized solution")) for i in eachindex(cut.linking_vars)]
             residual_unst = cut.alpha + sum(terms_unst)
@@ -642,6 +754,7 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
         elseif n_cut_violations > 0
             @warn "FEASIBILITY_CUT_CHECK: $(n_cut_violations)/$(length(historical_feasibility_cuts)) historical feasibility cuts VIOLATED at stabilized planning_sol"
         end
+		end
 
     end
 

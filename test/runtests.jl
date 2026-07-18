@@ -63,6 +63,112 @@ using JuMP
             "vCAP_SE_solar_photovoltaic_1_period1",
         )
     end
+    @testset "Feasibility-cut checkpoints round-trip and replay" begin
+        checkpoint_directory = mktempdir()
+        cut = (
+            w=2,
+            lambda=[2.0, -1.0],
+            linking_vars=["x", "y"],
+            op_cost=5.0,
+            alpha=3.0,
+            x_generated=[3.0, 4.0],
+            generating_residual=5.0,
+            k_added=7,
+        )
+
+        checkpoint_path = MacroEnergySolvers._write_feasibility_cut_checkpoint(
+            checkpoint_directory,
+            1,
+            cut,
+        )
+        @test isfile(checkpoint_path)
+        loaded_cuts = MacroEnergySolvers._load_feasibility_cut_checkpoints(
+            checkpoint_directory,
+        )
+        @test length(loaded_cuts) == 1
+        loaded = only(loaded_cuts)
+        @test loaded.checkpoint_id == 1
+        @test loaded.w == "2"
+        @test loaded.k_added == 7
+        @test loaded.alpha == 3.0
+        @test loaded.op_cost == 5.0
+        @test loaded.generating_residual == 5.0
+        @test loaded.linking_vars == ["x", "y"]
+        @test loaded.lambda == [2.0, -1.0]
+        @test loaded.x_generated == [3.0, 4.0]
+
+        # Incomplete temporary files are intentionally invisible to replay.
+        write(joinpath(checkpoint_directory, ".feasibility_cut_00000002.tsv.tmp"), "partial")
+        @test length(MacroEnergySolvers._load_feasibility_cut_checkpoints(
+            checkpoint_directory,
+        )) == 1
+
+        model = Model()
+        @variable(model, x, base_name="x")
+        @variable(model, y, base_name="y")
+        constraints = MacroEnergySolvers._add_replayed_feasibility_cuts!(
+            model,
+            loaded_cuts,
+        )
+        @test length(constraints) == 1
+        constraint = only(constraints)
+        @test name(constraint) == "BendersReplayFeasibilityCut_00000001"
+        constraint_data = constraint_object(constraint)
+        # JuMP normalizes the affine constant into the LessThan upper bound.
+        @test JuMP.constant(constraint_data.func) == 0.0
+        @test JuMP.coefficient(constraint_data.func, x) == 2.0
+        @test JuMP.coefficient(constraint_data.func, y) == -1.0
+        @test constraint_data.set.upper == -3.0
+
+        state_path = MacroEnergySolvers._write_feasibility_checkpoint_state(
+            checkpoint_directory,
+            1,
+            12.5,
+        )
+        @test isfile(state_path)
+        @test MacroEnergySolvers._read_feasibility_checkpoint_state(
+            checkpoint_directory,
+        ) == (cut_count=1, master_objective=12.5)
+        MacroEnergySolvers._write_feasibility_checkpoint_state(
+            checkpoint_directory,
+            2,
+            13.5,
+        )
+        @test MacroEnergySolvers._read_feasibility_checkpoint_state(
+            checkpoint_directory,
+        ) == (cut_count=2, master_objective=13.5)
+    end
+    @testset "Checkpoint configuration is explicit" begin
+        environment_names = (
+            "BENDERS_FEASIBILITY_CUT_CHECKPOINT_DIR",
+            "BENDERS_FEASIBILITY_CUT_REPLAY",
+            "BENDERS_FEASIBILITY_CUT_WRITE",
+        )
+        original_values = Dict(name => get(ENV, name, nothing) for name in environment_names)
+        try
+            delete!(ENV, "BENDERS_FEASIBILITY_CUT_CHECKPOINT_DIR")
+            ENV["BENDERS_FEASIBILITY_CUT_REPLAY"] = "true"
+            ENV["BENDERS_FEASIBILITY_CUT_WRITE"] = "false"
+            @test_throws ErrorException MacroEnergySolvers._feasibility_cut_checkpoint_config()
+
+            ENV["BENDERS_FEASIBILITY_CUT_CHECKPOINT_DIR"] = "/tmp/checkpoints"
+            ENV["BENDERS_FEASIBILITY_CUT_REPLAY"] = "false"
+            ENV["BENDERS_FEASIBILITY_CUT_WRITE"] = "true"
+            @test MacroEnergySolvers._feasibility_cut_checkpoint_config() == (
+                directory="/tmp/checkpoints",
+                replay=false,
+                write=true,
+            )
+        finally
+            for (name, value) in original_values
+                if isnothing(value)
+                    delete!(ENV, name)
+                else
+                    ENV[name] = value
+                end
+            end
+        end
+    end
     @testset "Code quality (Aqua.jl)" begin
         Aqua.test_all(MacroEnergySolvers)
     end

@@ -10,6 +10,7 @@ module MacroEnergySolvers
     include("benders/planning.jl")
     include("benders/subproblems.jl")
     include("benders/regularization.jl")
+    include("benders/checkpointing.jl")
     include("benders/algorithms.jl")
     include("logging.jl")
     include("benders/mga.jl")   # added for MGA
