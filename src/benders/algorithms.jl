@@ -193,6 +193,20 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 	checkpoint_exact_feasibility_phase = true
 	historical_feasibility_cuts = NamedTuple[replayed_feasibility_cuts...]
 	historical_optimality_cuts = NamedTuple[]
+	seen_feasibility_cut_signatures = Set{String}()
+	for cut in replayed_feasibility_cuts
+		push!(
+			seen_feasibility_cut_signatures,
+			_canonical_feasibility_cut_signature(
+				cut.alpha,
+				cut.lambda,
+				cut.linking_vars,
+			),
+		)
+	end
+	if !isempty(replayed_feasibility_cuts)
+		@info "FEASIBILITY_CUT_REPLAY_DIVERSITY: total=$(length(replayed_feasibility_cuts)) unique=$(length(seen_feasibility_cut_signatures)) duplicates=$(length(replayed_feasibility_cuts) - length(seen_feasibility_cut_signatures))"
+	end
 
 	if integer_investment == 1 && stab_method != "off"
 		integer_variables = planning_variables_ref[is_integer.(planning_variables_ref)];
@@ -460,11 +474,37 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 		@info("Updating the planning problem....")
 		time_start_update = time()
 
-		update_planning_problem_multi_cuts!(planning_problem,subop_sol,planning_sol,linking_variables_sub,k)
+		cut_selection = _select_new_master_cuts!(
+			seen_feasibility_cut_signatures,
+			subop_sol,
+			planning_sol,
+			linking_variables_sub,
+			k,
+		)
+		master_subop_sol = cut_selection.selected_subop_sol
+		for cut in cut_selection.duplicate_feasibility_cuts
+			@warn "FEASIBILITY_CUT_DUPLICATE_SKIPPED: w=$(cut.w) k=$(k) source=$(cut.cut_source) generating_residual=$(cut.generating_residual)"
+		end
+		if isempty(master_subop_sol)
+			error(
+				"All feasibility cuts generated at Benders iteration $k duplicate " *
+				"cuts already present in the master. No master progress is possible. " *
+				"Try BENDERS_FEASIBILITY_CUT_MODE=phase1 to request a different " *
+				"certificate family.",
+			)
+		end
+
+		update_planning_problem_multi_cuts!(
+			planning_problem,
+			master_subop_sol,
+			planning_sol,
+			linking_variables_sub,
+			k,
+		)
 
         # Record feasibility cuts added this iteration for exact
         # cross-iteration residual checks.
-        for (w, sol) in subop_sol
+		for (w, sol) in master_subop_sol
             if sol.theta_coeff == 0
                 linking_vars = copy(linking_variables_sub[w])
                 x_generated = [planning_sol.values[v] for v in linking_vars]
@@ -479,8 +519,9 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
                     op_cost=sol.op_cost,
                     alpha=alpha,
                     x_generated=x_generated,
-                    generating_residual=generating_residual,
-                    k_added=k,
+					generating_residual=generating_residual,
+					k_added=k,
+					cut_source=hasproperty(sol, :cut_source) ? sol.cut_source : :unknown,
 				)
 				push!(historical_feasibility_cuts, cut)
 				if checkpoint_config.write
@@ -492,7 +533,7 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 					@info "FEASIBILITY_CUT_CHECKPOINT_WRITTEN: checkpoint_id=$(checkpoint_next_id) w=$(w) k=$(k) path=$(checkpoint_path)"
 					checkpoint_next_id += 1
 				end
-                @info "FEASIBILITY_CUT_ADDED: w=$(w) k=$(k) alpha=$(round(alpha,sigdigits=6)) generating_residual=$(round(generating_residual,sigdigits=6)) normalized=$(round(generating_normalized_residual,sigdigits=6)) (must be > 0 to separate generating point)"
+				@info "FEASIBILITY_CUT_ADDED: w=$(w) k=$(k) source=$(cut.cut_source) alpha=$(round(alpha,sigdigits=6)) generating_residual=$(round(generating_residual,sigdigits=6)) normalized=$(round(generating_normalized_residual,sigdigits=6)) (must be > 0 to separate generating point)"
                 if !isempty(mono_linking_values)
                     missing_variables = filter(v -> !haskey(mono_linking_values, v), linking_vars)
                     if isempty(missing_variables)

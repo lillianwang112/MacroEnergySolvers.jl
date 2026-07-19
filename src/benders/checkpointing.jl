@@ -9,6 +9,104 @@ function _checkpoint_env_flag(name::String, default::Bool=false)
     error("$name must be a boolean value; received $(repr(raw_value))")
 end
 
+function _feasibility_cut_mode()
+    raw_value = lowercase(strip(get(ENV, "BENDERS_FEASIBILITY_CUT_MODE", "auto")))
+    raw_value in ("auto", "farkas", "phase1") || error(
+        "BENDERS_FEASIBILITY_CUT_MODE must be auto, farkas, or phase1; " *
+        "received $(repr(raw_value))",
+    )
+    return Symbol(raw_value)
+end
+
+function _canonical_feasibility_cut_signature(
+    alpha::Real,
+    lambda::AbstractVector{<:Real},
+    linking_vars::AbstractVector{<:AbstractString};
+    coefficient_tolerance::Real=1e-10,
+    digits::Integer=10,
+)
+    length(lambda) == length(linking_vars) || error(
+        "Cannot canonicalize a feasibility cut with mismatched coefficients and variables",
+    )
+    coefficients = Float64[Float64(alpha)]
+    append!(coefficients, Float64.(lambda))
+    all(isfinite, coefficients) || error(
+        "Cannot canonicalize a feasibility cut containing non-finite coefficients",
+    )
+    scale = maximum(abs, coefficients; init=0.0)
+    scale > coefficient_tolerance || error(
+        "Cannot canonicalize a feasibility cut whose coefficients are all numerically zero",
+    )
+
+    normalized_alpha = round(Float64(alpha) / scale; digits=digits)
+    normalized_terms = Tuple{String,Float64}[]
+    for (variable_name, coefficient) in zip(linking_vars, lambda)
+        abs(coefficient) <= coefficient_tolerance && continue
+        push!(
+            normalized_terms,
+            (String(variable_name), round(Float64(coefficient) / scale; digits=digits)),
+        )
+    end
+    sort!(normalized_terms; by=first)
+    return string(normalized_alpha, '|', join(("$(name)=$(value)" for (name, value) in normalized_terms), '|'))
+end
+
+function _select_new_master_cuts!(
+    seen_feasibility_cut_signatures::Set{String},
+    subop_sol::AbstractDict,
+    planning_sol::NamedTuple,
+    linking_variables_sub::AbstractDict,
+    k::Integer,
+)
+    selected_subop_sol = Dict{Any,Any}()
+    accepted_feasibility_cuts = NamedTuple[]
+    duplicate_feasibility_cuts = NamedTuple[]
+
+    for w in sort!(collect(keys(subop_sol)); by=string)
+        sol = subop_sol[w]
+        if sol.theta_coeff != 0
+            selected_subop_sol[w] = sol
+            continue
+        end
+
+        linking_vars = copy(linking_variables_sub[w])
+        x_generated = [planning_sol.values[v] for v in linking_vars]
+        alpha = sol.op_cost - dot(sol.lambda, x_generated)
+        generating_residual = alpha + dot(sol.lambda, x_generated)
+        cut_source = hasproperty(sol, :cut_source) ? sol.cut_source : :unknown
+        cut = (
+            w=w,
+            lambda=copy(sol.lambda),
+            linking_vars=linking_vars,
+            op_cost=sol.op_cost,
+            alpha=alpha,
+            x_generated=x_generated,
+            generating_residual=generating_residual,
+            k_added=Int(k),
+            cut_source=cut_source,
+        )
+        signature = _canonical_feasibility_cut_signature(
+            cut.alpha,
+            cut.lambda,
+            cut.linking_vars,
+        )
+        if signature in seen_feasibility_cut_signatures
+            push!(duplicate_feasibility_cuts, merge(cut, (signature=signature,)))
+            continue
+        end
+
+        push!(seen_feasibility_cut_signatures, signature)
+        selected_subop_sol[w] = sol
+        push!(accepted_feasibility_cuts, merge(cut, (signature=signature,)))
+    end
+
+    return (
+        selected_subop_sol=selected_subop_sol,
+        accepted_feasibility_cuts=accepted_feasibility_cuts,
+        duplicate_feasibility_cuts=duplicate_feasibility_cuts,
+    )
+end
+
 function _feasibility_cut_checkpoint_config()
     directory = strip(get(ENV, "BENDERS_FEASIBILITY_CUT_CHECKPOINT_DIR", ""))
     replay = _checkpoint_env_flag("BENDERS_FEASIBILITY_CUT_REPLAY")
@@ -94,6 +192,12 @@ function _write_feasibility_cut_checkpoint(
         println(io, "checkpoint_id\t", checkpoint_id)
         println(io, "w\t", _validate_checkpoint_text(string(cut.w), "subproblem id"))
         println(io, "k_added\t", Int(cut.k_added))
+        cut_source = hasproperty(cut, :cut_source) ? cut.cut_source : :unknown
+        println(
+            io,
+            "cut_source\t",
+            _validate_checkpoint_text(string(cut_source), "cut source"),
+        )
         println(io, "alpha\t", repr(Float64(cut.alpha)))
         println(io, "op_cost\t", repr(Float64(cut.op_cost)))
         println(io, "generating_residual\t", repr(Float64(cut.generating_residual)))
@@ -195,6 +299,7 @@ function _read_feasibility_cut_checkpoint(path::AbstractString)
         x_generated=x_generated,
         generating_residual=generating_residual,
         k_added=k_added,
+        cut_source=Symbol(get(metadata, "cut_source", "unknown")),
     )
 end
 

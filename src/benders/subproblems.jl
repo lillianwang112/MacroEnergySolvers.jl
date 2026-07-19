@@ -318,6 +318,7 @@ function solve_subproblem(m::Model,planning_sol::NamedTuple,linking_variables_su
 		op_cost = objective_value(m);
 		lambda = [dual(FixRef(variable_by_name(m,y))) for y in linking_variables_sub];
 		theta_coeff = 1;
+        cut_source = elastic_slack ? :elastic_optimality : :optimality
         lmax = isempty(lambda) ? 0.0 : maximum(abs.(lambda))
         if elastic_slack
             slack_val = value(m[:slack_max])
@@ -349,11 +350,19 @@ function solve_subproblem(m::Model,planning_sol::NamedTuple,linking_variables_su
     else
         @info "Subproblem is infeasible (status=$(termination_status(m)), primal=$(primal_status(m)), dual=$(dual_status(m))), attempting Farkas dual feasibility cut..."
 
+        feasibility_cut_mode = _feasibility_cut_mode()
+        @info "FEASIBILITY_CUT_MODE: w=$(subproblem_index) mode=$(feasibility_cut_mode)"
+
         # Attempt Farkas dual approach: extract dual ray directly without re-solving.
         # op_cost must be the full Farkas objective pi^T*b + lambda^T*x_bar (> 0 by certificate).
         # Using only lambda^T*x_bar (the old formula) makes the cut 0 >= lambda^T*x — a hyperplane
         # through the origin that trivially passes all x >= 0 and builds zero capacity pressure.
-        use_farkas = dual_status(m) == MOI.INFEASIBILITY_CERTIFICATE
+        farkas_available = dual_status(m) == MOI.INFEASIBILITY_CERTIFICATE
+        feasibility_cut_mode == :farkas && !farkas_available && error(
+            "BENDERS_FEASIBILITY_CUT_MODE=farkas requested, but no Farkas certificate " *
+            "is available for subproblem $(subproblem_index) (dual_status=$(dual_status(m)))",
+        )
+        use_farkas = feasibility_cut_mode != :phase1 && farkas_available
         if use_farkas
             lambda = [dual(FixRef(variable_by_name(m,y))) for y in linking_variables_sub];
             # Use Gurobi's certified dual objective directly instead of manually
@@ -487,6 +496,7 @@ function solve_subproblem(m::Model,planning_sol::NamedTuple,linking_variables_su
             alpha_rel = abs(physical_farkas) / max(1.0, abs(cert))
             op_cost = cert
             theta_coeff = 0;
+            cut_source = :farkas
             n_nz = sum(abs.(lambda) .> 1e-8)
             if op_cost > 0
                 @info "Farkas cut (dual ray): op_cost=$(round(op_cost, sigdigits=4)) [physical=$(round(physical_farkas, sigdigits=6)) rel=$(round(alpha_rel, sigdigits=3)), linking_plan=$(round(linking_farkas_plan, sigdigits=4)) linking_fixed=$(round(linking_farkas_fixed, sigdigits=4))], lambda_norm=$(round(norm(lambda), sigdigits=4)), lambda_max=$(round(maximum(abs.(lambda)), sigdigits=4)), n_nonzero=$(n_nz)/$(length(lambda)), max_fix_vs_plan=$(round(max_fix_vs_plan_diff, sigdigits=3))"
@@ -508,7 +518,9 @@ function solve_subproblem(m::Model,planning_sol::NamedTuple,linking_variables_su
         end
         if !use_farkas
             # Farkas duals unavailable or invalid — fall back to slack-based feasibility subproblem
-            if dual_status(m) == MOI.INFEASIBILITY_CERTIFICATE
+            if feasibility_cut_mode == :phase1
+                @info "Using forced dual-simplex Phase-I feasibility cut for subproblem $(subproblem_index)."
+            elseif dual_status(m) == MOI.INFEASIBILITY_CERTIFICATE
                 @warn "Falling back to slack feasibility subproblem (Farkas objective was ≤ 0)..."
             else
                 @warn "Farkas duals unavailable (dual_status=$(dual_status(m))), falling back to slack feasibility subproblem..."
@@ -551,6 +563,7 @@ function solve_subproblem(m::Model,planning_sol::NamedTuple,linking_variables_su
 
                 lambda = [dual(FixRef(variable_by_name(m,y))) for y in linking_variables_sub]
                 theta_coeff = 0
+                cut_source = :phase1
                 lambda_max = isempty(lambda) ? 0.0 : maximum(abs.(lambda))
                 @info "Slack feasibility cut: op_cost=$(round(op_cost, sigdigits=4)), lambda_norm=$(round(norm(lambda), sigdigits=4)), lambda_max=$(round(lambda_max, sigdigits=4)), n_nonzero=$(sum(abs.(lambda) .> 1e-8))/$(length(lambda))"
 
@@ -565,7 +578,12 @@ function solve_subproblem(m::Model,planning_sol::NamedTuple,linking_variables_su
         end
 	end
 
-	return (op_cost=op_cost,lambda = lambda,theta_coeff=theta_coeff)
+	return (
+        op_cost=op_cost,
+        lambda=lambda,
+        theta_coeff=theta_coeff,
+        cut_source=cut_source,
+    )
 
 end
 

@@ -74,6 +74,7 @@ using JuMP
             x_generated=[3.0, 4.0],
             generating_residual=5.0,
             k_added=7,
+            cut_source=:phase1,
         )
 
         checkpoint_path = MacroEnergySolvers._write_feasibility_cut_checkpoint(
@@ -90,6 +91,7 @@ using JuMP
         @test loaded.checkpoint_id == 1
         @test loaded.w == "2"
         @test loaded.k_added == 7
+        @test loaded.cut_source == :phase1
         @test loaded.alpha == 3.0
         @test loaded.op_cost == 5.0
         @test loaded.generating_residual == 5.0
@@ -137,6 +139,56 @@ using JuMP
         @test MacroEnergySolvers._read_feasibility_checkpoint_state(
             checkpoint_directory,
         ) == (cut_count=2, master_objective=13.5)
+    end
+    @testset "Feasibility-cut modes and duplicate suppression" begin
+        original_mode = get(ENV, "BENDERS_FEASIBILITY_CUT_MODE", nothing)
+        try
+            delete!(ENV, "BENDERS_FEASIBILITY_CUT_MODE")
+            @test MacroEnergySolvers._feasibility_cut_mode() == :auto
+            for mode in ("auto", "farkas", "phase1")
+                ENV["BENDERS_FEASIBILITY_CUT_MODE"] = mode
+                @test MacroEnergySolvers._feasibility_cut_mode() == Symbol(mode)
+            end
+            ENV["BENDERS_FEASIBILITY_CUT_MODE"] = "invalid"
+            @test_throws ErrorException MacroEnergySolvers._feasibility_cut_mode()
+        finally
+            if isnothing(original_mode)
+                delete!(ENV, "BENDERS_FEASIBILITY_CUT_MODE")
+            else
+                ENV["BENDERS_FEASIBILITY_CUT_MODE"] = original_mode
+            end
+        end
+
+        signature = MacroEnergySolvers._canonical_feasibility_cut_signature
+        @test signature(-1.0, [1.0, 0.0], ["x", "y"]) ==
+            signature(-2.0, [2.0, 0.0], ["x", "y"])
+        @test signature(-1.0, [1.0, 0.0], ["x", "y"]) !=
+            signature(-1.0, [0.0, 1.0], ["x", "y"])
+        @test_throws ErrorException signature(0.0, [0.0], ["x"])
+
+        planning_sol = (
+            planning_cost=0.0,
+            values=Dict("x" => 2.0, "y" => 3.0),
+        )
+        subop_sol = Dict(
+            1 => (op_cost=1.0, lambda=[1.0], theta_coeff=0, cut_source=:farkas),
+            2 => (op_cost=1.0, lambda=[1.0], theta_coeff=0, cut_source=:farkas),
+            3 => (op_cost=2.0, lambda=[1.0], theta_coeff=0, cut_source=:phase1),
+        )
+        linking_variables_sub = Dict(1 => ["x"], 2 => ["x"], 3 => ["y"])
+        seen = Set{String}()
+        selection = MacroEnergySolvers._select_new_master_cuts!(
+            seen,
+            subop_sol,
+            planning_sol,
+            linking_variables_sub,
+            4,
+        )
+        @test Set(keys(selection.selected_subop_sol)) == Set([1, 3])
+        @test length(selection.accepted_feasibility_cuts) == 2
+        @test length(selection.duplicate_feasibility_cuts) == 1
+        @test only(selection.duplicate_feasibility_cuts).w == 2
+        @test length(seen) == 2
     end
     @testset "Checkpoint configuration is explicit" begin
         environment_names = (
