@@ -33,6 +33,97 @@ A NamedTuple containing the solution of the stabilized problem with the same str
 _level_set_proximal_scale(incumbent_value, raw_value) =
 	max(1.0, abs(Float64(incumbent_value)), abs(Float64(raw_value)))
 
+"""
+    solve_feasibility_proximal_problem(
+        m,
+        planning_variables,
+        raw_planning_sol,
+        center_sol,
+    )
+
+Projects an infeasible Benders evaluation point onto the planning master after
+new feasibility cuts have been added. The projection minimizes a scaled
+squared distance to `center_sol` and intentionally does not replace the
+cost-optimal master solve used to compute the lower bound.
+
+This is useful before a finite upper bound exists, when the ordinary level-set
+stabilization is undefined and the unregularized master otherwise jumps among
+cost-optimal extreme points.
+"""
+function solve_feasibility_proximal_problem(
+	m::Model,
+	planning_variables::Vector{String},
+	raw_planning_sol::NamedTuple,
+	center_sol::NamedTuple,
+)
+	original_objective = objective_function(m)
+	proximal_variables = String[]
+	proximal_scales = Dict{String,Float64}()
+
+	for variable_name in planning_variables
+		startswith(variable_name, "vTHETA") && continue
+		haskey(raw_planning_sol.values, variable_name) || error(
+			"FEASIBILITY_PROXIMAL: raw planning solution is missing $variable_name",
+		)
+		haskey(center_sol.values, variable_name) || error(
+			"FEASIBILITY_PROXIMAL: center solution is missing $variable_name",
+		)
+		isnothing(variable_by_name(m, variable_name)) && error(
+			"FEASIBILITY_PROXIMAL: planning model is missing $variable_name",
+		)
+		push!(proximal_variables, variable_name)
+		proximal_scales[variable_name] = _level_set_proximal_scale(
+			center_sol.values[variable_name],
+			raw_planning_sol.values[variable_name],
+		)
+	end
+	isempty(proximal_variables) && error(
+		"FEASIBILITY_PROXIMAL: no non-vTHETA planning variables were found",
+	)
+
+	projected_sol = nothing
+	try
+		@objective(
+			m,
+			Min,
+			sum(
+				((variable_by_name(m, variable_name) - center_sol.values[variable_name]) /
+				 proximal_scales[variable_name])^2
+				for variable_name in proximal_variables
+			),
+		)
+		optimize!(m)
+		has_values(m) || error(
+			"FEASIBILITY_PROXIMAL solve failed: termination=$(termination_status(m)) " *
+			"primal=$(primal_status(m)) raw=$(repr(raw_status(m)))",
+		)
+
+		planning_cost, variable_values = process_planning_sol(m, planning_variables)
+		projected_sol = (
+			planning_cost=planning_cost,
+			values=variable_values,
+		)
+		normalized_squared_distance = sum(
+			((projected_sol.values[variable_name] - center_sol.values[variable_name]) /
+			 proximal_scales[variable_name])^2
+			for variable_name in proximal_variables
+		)
+		max_abs_center_difference = maximum(
+			abs(projected_sol.values[variable_name] - center_sol.values[variable_name])
+			for variable_name in proximal_variables
+		)
+		max_abs_raw_difference = maximum(
+			abs(projected_sol.values[variable_name] - raw_planning_sol.values[variable_name])
+			for variable_name in proximal_variables
+		)
+		@info "FEASIBILITY_PROXIMAL_SOLVED: variables=$(length(proximal_variables)) normalized_squared_distance=$(normalized_squared_distance) max_abs_center_difference=$(max_abs_center_difference) max_abs_raw_difference=$(max_abs_raw_difference) planning_cost=$(planning_cost)"
+	finally
+		@objective(m, Min, original_objective)
+	end
+
+	return projected_sol
+end
+
 function solve_int_level_set_problem(
 	m::Model,
 	planning_variables::Vector{String},

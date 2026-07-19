@@ -241,12 +241,17 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 	budget_uniform_override = lowercase(strip(get(ENV, "BENDERS_BUDGET_UNIFORM_OVERRIDE", "true"))) in ("1", "true", "yes", "on")
 	oracle_seed_enabled = lowercase(strip(get(ENV, "BENDERS_ORACLE_SEED", "false"))) in ("1", "true", "yes", "on")
 	levelset_proximal = lowercase(strip(get(ENV, "BENDERS_LEVELSET_PROXIMAL", "false"))) in ("1", "true", "yes", "on")
+	feasibility_proximal = _checkpoint_env_flag(
+		"BENDERS_FEASIBILITY_PROXIMAL",
+		false,
+	)
 	optimality_cut_audit = lowercase(strip(get(ENV, "BENDERS_OPTIMALITY_CUT_AUDIT", "false"))) in ("1", "true", "yes", "on")
 	feasibility_cut_causal_audit = _checkpoint_env_flag(
 		"BENDERS_FEASIBILITY_CUT_CAUSAL_AUDIT",
 		true,
 	)
 	levelset_proximal && @info("Incumbent-anchored level-set projection enabled by BENDERS_LEVELSET_PROXIMAL.")
+	feasibility_proximal && @info("Feasibility-phase proximal projection enabled by BENDERS_FEASIBILITY_PROXIMAL.")
 	optimality_cut_audit && @info("Optimality-cut master-movement audit enabled by BENDERS_OPTIMALITY_CUT_AUDIT.")
 
 	# Pre-compute Budget linking variable groups and their constraint RHS.
@@ -289,6 +294,11 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 	elseif n_budget_groups > 0
 		@info("Budget uniform override disabled by BENDERS_BUDGET_UNIFORM_OVERRIDE; subproblems will use the unmodified planning solution while UB==Inf.")
 	end
+	feasibility_proximal && budget_uniform_override && error(
+		"BENDERS_FEASIBILITY_PROXIMAL=true is incompatible with " *
+		"BENDERS_BUDGET_UNIFORM_OVERRIDE=true because the override can move the " *
+		"projected point outside the accumulated master cuts.",
+	)
 
     UB = Inf;
 
@@ -659,7 +669,16 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 			term_status = "MAXITER"
 			break
 		elseif UB==Inf
-			planning_sol = deepcopy(unst_planning_sol);
+			if feasibility_proximal
+				planning_sol = solve_feasibility_proximal_problem(
+					planning_problem,
+					planning_variables,
+					unst_planning_sol,
+					planning_sol,
+				)
+			else
+				planning_sol = deepcopy(unst_planning_sol);
+			end
 			# Override Budget to uniform distribution before the next subproblem evaluation.
 			# The LP re-concentrates Budget at a simplex vertex each iteration (one period gets
 			# ~all of the cap, others get ~0).  Subproblems with Budget≈0 are always infeasible,
