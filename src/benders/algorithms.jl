@@ -299,6 +299,64 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 		"BENDERS_BUDGET_UNIFORM_OVERRIDE=true because the override can move the " *
 		"projected point outside the accumulated master cuts.",
 	)
+	if feasibility_proximal && checkpoint_config.replay
+		saved_center = _read_feasibility_proximal_center(checkpoint_config.directory)
+		center_restored = false
+		if !isnothing(saved_center)
+			if saved_center.cut_count == length(replayed_feasibility_cuts)
+				missing_center_variables = filter(
+					name -> !startswith(name, "vTHETA") &&
+						!haskey(saved_center.values, name),
+					planning_variables,
+				)
+				isempty(missing_center_variables) || error(
+					"FEASIBILITY_PROXIMAL_CENTER_REPLAY_INCOMPLETE: missing " *
+					join(first(missing_center_variables, min(5, length(missing_center_variables))), ", "),
+				)
+				restored_values = copy(planning_sol.values)
+				for (variable_name, variable_value) in saved_center.values
+					haskey(planning_sol.values, variable_name) || error(
+						"FEASIBILITY_PROXIMAL_CENTER_REPLAY_UNKNOWN_VARIABLE: $variable_name",
+					)
+					restored_values[variable_name] = variable_value
+				end
+				planning_sol = (
+					planning_cost=saved_center.planning_cost,
+					values=restored_values,
+				)
+				center_restored = true
+				@info "FEASIBILITY_PROXIMAL_CENTER_RESTORED: cuts=$(saved_center.cut_count) variables=$(length(saved_center.values)) path=$(saved_center.path)"
+			else
+				@warn "FEASIBILITY_PROXIMAL_CENTER_IGNORED: saved cuts=$(saved_center.cut_count) replayed cuts=$(length(replayed_feasibility_cuts)); reconstructing from the latest complete generating point"
+			end
+		end
+
+		if !center_restored
+			recovered_center = _recover_latest_feasibility_generating_point(
+				replayed_feasibility_cuts,
+				planning_sol,
+			)
+			isnothing(recovered_center) && error(
+				"FEASIBILITY_PROXIMAL_CENTER_RECOVERY_FAILED: no replayed cuts",
+			)
+			@info "FEASIBILITY_PROXIMAL_CENTER_RECOVERED: iteration=$(recovered_center.latest_iteration) cuts=$(recovered_center.cuts) variables=$(recovered_center.recovered_variables); projecting it through the fully replayed master before the first subproblem evaluation"
+			planning_sol = solve_feasibility_proximal_problem(
+				planning_problem,
+				planning_variables,
+				planning_sol,
+				recovered_center,
+			)
+			if checkpoint_config.write
+				center_path = _write_feasibility_proximal_center(
+					checkpoint_config.directory,
+					length(replayed_feasibility_cuts),
+					planning_sol,
+					planning_variables,
+				)
+				@info "FEASIBILITY_PROXIMAL_CENTER_WRITTEN: cuts=$(length(replayed_feasibility_cuts)) path=$(center_path)"
+			end
+		end
+	end
 
     UB = Inf;
 
@@ -676,6 +734,15 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 					unst_planning_sol,
 					planning_sol,
 				)
+				if checkpoint_config.write && checkpoint_exact_feasibility_phase
+					center_path = _write_feasibility_proximal_center(
+						checkpoint_config.directory,
+						checkpoint_next_id - 1,
+						planning_sol,
+						planning_variables,
+					)
+					@info "FEASIBILITY_PROXIMAL_CENTER_WRITTEN: cuts=$(checkpoint_next_id - 1) path=$(center_path)"
+				end
 			else
 				planning_sol = deepcopy(unst_planning_sol);
 			end

@@ -139,6 +139,41 @@ using JuMP
         @test MacroEnergySolvers._read_feasibility_checkpoint_state(
             checkpoint_directory,
         ) == (cut_count=2, master_objective=13.5)
+
+        center_sol = (
+            planning_cost=99.0,
+            values=Dict(
+                "x" => 1.25,
+                "y" => -2.5,
+                "vTHETA[1]" => 0.0,
+            ),
+        )
+        center_path = MacroEnergySolvers._write_feasibility_proximal_center(
+            checkpoint_directory,
+            2,
+            center_sol,
+            ["x", "y", "vTHETA[1]"],
+        )
+        @test isfile(center_path)
+        loaded_center = MacroEnergySolvers._read_feasibility_proximal_center(
+            checkpoint_directory,
+        )
+        @test loaded_center.cut_count == 2
+        @test loaded_center.planning_cost == 99.0
+        @test loaded_center.values == Dict("x" => 1.25, "y" => -2.5)
+
+        raw_center = (
+            planning_cost=12.0,
+            values=Dict("x" => 0.0, "y" => 0.0, "z" => 9.0),
+        )
+        older_high_k_cut = merge(loaded, (checkpoint_id=0, k_added=99))
+        recovered_center = MacroEnergySolvers._recover_latest_feasibility_generating_point(
+            [older_high_k_cut, loaded],
+            raw_center,
+        )
+        @test recovered_center.latest_iteration == 7
+        @test recovered_center.recovered_variables == 2
+        @test recovered_center.values == Dict("x" => 3.0, "y" => 4.0, "z" => 9.0)
     end
     @testset "Feasibility-cut modes and duplicate suppression" begin
         original_mode = get(ENV, "BENDERS_FEASIBILITY_CUT_MODE", nothing)

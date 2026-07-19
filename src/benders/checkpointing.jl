@@ -386,3 +386,150 @@ function _read_feasibility_checkpoint_state(directory::AbstractString)
         ),
     )
 end
+
+const _FEASIBILITY_PROXIMAL_CENTER_HEADER =
+    "MacroEnergySolvers feasibility proximal center\t1"
+
+function _write_feasibility_proximal_center(
+    directory::AbstractString,
+    cut_count::Integer,
+    planning_sol::NamedTuple,
+    planning_variables::AbstractVector{<:AbstractString},
+)
+    cut_count >= 0 || error("Proximal-center cut count cannot be negative")
+    variable_names = sort!(
+        String[
+            name for name in planning_variables
+            if !startswith(name, "vTHETA")
+        ],
+    )
+    isempty(variable_names) && error("Cannot checkpoint an empty proximal center")
+    isfinite(planning_sol.planning_cost) ||
+        error("Proximal center contains a non-finite planning cost")
+    for variable_name in variable_names
+        haskey(planning_sol.values, variable_name) || error(
+            "Proximal center is missing planning variable $variable_name",
+        )
+        isfinite(planning_sol.values[variable_name]) || error(
+            "Proximal center contains a non-finite value for $variable_name",
+        )
+    end
+
+    path = joinpath(directory, "feasibility_proximal_center.tsv")
+    temporary_target = path * ".new"
+    ispath(temporary_target) && rm(temporary_target; force=true)
+    _atomic_write(temporary_target) do io
+        println(io, _FEASIBILITY_PROXIMAL_CENTER_HEADER)
+        println(io, "cut_count\t", cut_count)
+        println(io, "n_variables\t", length(variable_names))
+        println(io, "planning_cost\t", repr(Float64(planning_sol.planning_cost)))
+        println(io, "variable_name\tvalue")
+        for variable_name in variable_names
+            println(
+                io,
+                _validate_checkpoint_text(variable_name, "variable name"),
+                '\t',
+                repr(Float64(planning_sol.values[variable_name])),
+            )
+        end
+    end
+    mv(temporary_target, path; force=true)
+    return path
+end
+
+function _read_feasibility_proximal_center(directory::AbstractString)
+    path = joinpath(directory, "feasibility_proximal_center.tsv")
+    isfile(path) || return nothing
+    lines = readlines(path)
+    length(lines) >= 5 || error("Malformed feasibility proximal center: $path")
+    lines[1] == _FEASIBILITY_PROXIMAL_CENTER_HEADER ||
+        error("Unsupported feasibility proximal-center header: $path")
+
+    cut_fields = split(lines[2], '\t'; limit=2)
+    count_fields = split(lines[3], '\t'; limit=2)
+    cost_fields = split(lines[4], '\t'; limit=2)
+    cut_fields[1] == "cut_count" || error("Missing cut_count in $path")
+    count_fields[1] == "n_variables" || error("Missing n_variables in $path")
+    cost_fields[1] == "planning_cost" || error("Missing planning_cost in $path")
+    lines[5] == "variable_name\tvalue" || error("Missing variable header in $path")
+    cut_count = _parse_checkpoint_number(Int, cut_fields[2], "cut_count", path)
+    n_variables = _parse_checkpoint_number(Int, count_fields[2], "n_variables", path)
+    planning_cost = _parse_checkpoint_number(
+        Float64,
+        cost_fields[2],
+        "planning_cost",
+        path,
+    )
+    variable_lines = lines[6:end]
+    length(variable_lines) == n_variables || error(
+        "Proximal center $path declares $n_variables variables but contains " *
+        "$(length(variable_lines))",
+    )
+
+    values = Dict{String,Float64}()
+    for line in variable_lines
+        fields = split(line, '\t'; limit=2)
+        length(fields) == 2 || error("Malformed proximal-center variable in $path: $line")
+        isempty(fields[1]) && error("Empty proximal-center variable name in $path")
+        haskey(values, fields[1]) && error(
+            "Duplicate proximal-center variable $(fields[1]) in $path",
+        )
+        values[String(fields[1])] = _parse_checkpoint_number(
+            Float64,
+            fields[2],
+            "proximal-center value",
+            path,
+        )
+    end
+    return (
+        cut_count=cut_count,
+        planning_cost=planning_cost,
+        values=values,
+        path=path,
+    )
+end
+
+function _recover_latest_feasibility_generating_point(
+    cuts,
+    raw_planning_sol::NamedTuple,
+)
+    isempty(cuts) && return nothing
+    # Iteration numbers restart at zero for each replay job, so the numerically
+    # largest k is not necessarily the newest point. Checkpoints are loaded in
+    # increasing id order; recover the final contiguous group instead.
+    latest_iteration = last(cuts).k_added
+    first_latest_index = length(cuts)
+    while first_latest_index > 1 &&
+            cuts[first_latest_index - 1].k_added == latest_iteration
+        first_latest_index -= 1
+    end
+    latest_cuts = cuts[first_latest_index:end]
+    recovered_values = copy(raw_planning_sol.values)
+    recovered_names = Set{String}()
+
+    for cut in latest_cuts
+        for (variable_name, value) in zip(cut.linking_vars, cut.x_generated)
+            if variable_name in recovered_names
+                isapprox(
+                    recovered_values[variable_name],
+                    value;
+                    atol=1e-8,
+                    rtol=1e-9,
+                ) || error(
+                    "Conflicting generating-point values for $variable_name in " *
+                    "replayed iteration $latest_iteration",
+                )
+            else
+                recovered_values[variable_name] = value
+                push!(recovered_names, variable_name)
+            end
+        end
+    end
+    return (
+        planning_cost=raw_planning_sol.planning_cost,
+        values=recovered_values,
+        latest_iteration=latest_iteration,
+        recovered_variables=length(recovered_names),
+        cuts=length(latest_cuts),
+    )
+end
