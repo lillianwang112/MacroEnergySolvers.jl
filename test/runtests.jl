@@ -63,6 +63,53 @@ using JuMP
             "vCAP_SE_solar_photovoltaic_1_period1",
         )
     end
+    @testset "Multisector bioherb NE master strengthening" begin
+        model = Model()
+        variables = Dict{String,VariableRef}()
+        for (variable_name, _) in
+            MacroEnergySolvers._MULTISECTOR_BIOHERB_NE_CAPACITY_COEFFICIENTS
+            variables[variable_name] = @variable(model, base_name=variable_name)
+        end
+
+        constraint = MacroEnergySolvers._add_multisector_bioherb_ne_master_strengthening!(
+            model,
+        )
+        @test name(constraint) ==
+            MacroEnergySolvers._MULTISECTOR_BIOHERB_NE_CONSTRAINT_NAME
+        constraint_data = constraint_object(constraint)
+        @test constraint_data.set.upper ==
+            MacroEnergySolvers._MULTISECTOR_BIOHERB_NE_SUPPLY_LIMIT
+        @test JuMP.constant(constraint_data.func) == 0.0
+        for (variable_name, coefficient) in
+            MacroEnergySolvers._MULTISECTOR_BIOHERB_NE_CAPACITY_COEFFICIENTS
+            @test JuMP.coefficient(
+                constraint_data.func,
+                variables[variable_name],
+            ) == coefficient
+        end
+
+        # The exact single-technology ray from the Della diagnostic is cut
+        # off, while the known monolithic capacity remains feasible.
+        ne_ft = variables["vCAP_NE_BECCS_FT_Herb_biomass_edge_period1"]
+        @test 0.85 * 697.788922721467 >
+            MacroEnergySolvers._MULTISECTOR_BIOHERB_NE_SUPPLY_LIMIT
+        @test 0.85 * 330.84444 <
+            MacroEnergySolvers._MULTISECTOR_BIOHERB_NE_SUPPLY_LIMIT
+        @test JuMP.coefficient(constraint_data.func, ne_ft) == 0.85
+
+        @test_throws ErrorException MacroEnergySolvers._add_multisector_bioherb_ne_master_strengthening!(
+            model,
+        )
+
+        incomplete_model = Model()
+        first_name = first(
+            MacroEnergySolvers._MULTISECTOR_BIOHERB_NE_CAPACITY_COEFFICIENTS,
+        )[1]
+        @variable(incomplete_model, base_name=first_name)
+        @test_throws ErrorException MacroEnergySolvers._add_multisector_bioherb_ne_master_strengthening!(
+            incomplete_model,
+        )
+    end
     @testset "Feasibility-cut checkpoints round-trip and replay" begin
         checkpoint_directory = mktempdir()
         cut = (

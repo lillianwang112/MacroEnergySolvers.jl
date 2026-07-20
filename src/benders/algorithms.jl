@@ -34,6 +34,87 @@ function _infer_nonnegative_linking_bound(variable_name::String)
 	return true
 end
 
+const _MULTISECTOR_BIOHERB_NE_CAPACITY_COEFFICIENTS = (
+	("vCAP_NE_Bio_NaturalGas_Herb_biomass_edge_period1", 0.85),
+	("vCAP_NE_BECCS_NaturalGas_Herb_biomass_edge_period1", 0.85),
+	("vCAP_NE_BECCS_H2_Herb_biomass_edge_period1", 0.85),
+	("vCAP_NE_Bio_Gasoline_Herb_biomass_edge_period1", 0.85),
+	("vCAP_NE_BECCS_Electricity_Herb_biomass_edge_period1", 0.40),
+	("vCAP_NE_Bio_FT_Herb_biomass_edge_period1", 0.85),
+	("vCAP_NE_BECCS_FT_Herb_biomass_edge_period1", 0.85),
+)
+
+const _MULTISECTOR_BIOHERB_NE_SUPPLY_LIMIT = 297.76
+const _MULTISECTOR_BIOHERB_NE_CONSTRAINT_NAME =
+	"BendersMasterStrengthening_bioherb_NE_period1"
+
+"""
+	_add_named_capacity_supply_constraint!(model, coefficients, rhs; name)
+
+Add a planning-master valid inequality of the form
+`sum(coefficient[name] * variable_by_name(model, name)) <= rhs`.
+
+This diagnostic helper requires every named variable to exist. A missing
+variable usually means that the constraint is being applied to a different
+case or model version, in which case silently adding a partial inequality
+would be unsafe.
+"""
+function _add_named_capacity_supply_constraint!(
+	model::Model,
+	coefficients,
+	rhs::Real;
+	name::String,
+)
+	isnothing(constraint_by_name(model, name)) || error(
+		"Planning-master strengthening constraint already exists: $name",
+	)
+
+	missing_variables = String[]
+	variables = Pair{VariableRef,Float64}[]
+	for (variable_name, coefficient) in coefficients
+		variable = variable_by_name(model, variable_name)
+		if isnothing(variable)
+			push!(missing_variables, variable_name)
+		else
+			push!(variables, variable => Float64(coefficient))
+		end
+	end
+	isempty(missing_variables) || error(
+		"Cannot add $name; missing planning variables: " *
+		join(missing_variables, ", "),
+	)
+
+	expression = AffExpr(0.0)
+	for (variable, coefficient) in variables
+		add_to_expression!(expression, coefficient, variable)
+	end
+	return @constraint(model, expression <= Float64(rhs), base_name=name)
+end
+
+"""
+	_add_multisector_bioherb_ne_master_strengthening!(planning_problem)
+
+Add the operationally implied `bioherb_NE` capacity inequality for the
+official three-zone multisector case. Every listed process draws from the
+same finite, supply-only `bioherb_NE` vertex and has an unconditional minimum
+flow equal to the listed fraction of installed input-edge capacity.
+"""
+function _add_multisector_bioherb_ne_master_strengthening!(planning_problem::Model)
+	constraint = _add_named_capacity_supply_constraint!(
+		planning_problem,
+		_MULTISECTOR_BIOHERB_NE_CAPACITY_COEFFICIENTS,
+		_MULTISECTOR_BIOHERB_NE_SUPPLY_LIMIT;
+		name=_MULTISECTOR_BIOHERB_NE_CONSTRAINT_NAME,
+	)
+	@info(
+		"MULTISECTOR_BIOHERB_NE_MASTER_STRENGTHENING_ADDED: " *
+		"terms=$(length(_MULTISECTOR_BIOHERB_NE_CAPACITY_COEFFICIENTS)) " *
+		"rhs=$(_MULTISECTOR_BIOHERB_NE_SUPPLY_LIMIT) " *
+		"constraint=$(_MULTISECTOR_BIOHERB_NE_CONSTRAINT_NAME)",
+	)
+	return constraint
+end
+
 """
 	benders(planning_problem::Model, 
 		subproblems::Union{Vector{Dict{Any, Any}}, DistributedArrays.DArray}, 
@@ -130,6 +211,13 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 		end
 	end
 	@info("Enforced lower bound ≥ 0 on $n_bounds_added/$(length(non_neg_var_names)) inferred-nonnegative linking variables (of $(length(all_linking_var_names)) total; signed net-policy Budget/vSTOR_CHANGE variables remain free)")
+
+	if _checkpoint_env_flag(
+		"BENDERS_MULTISECTOR_BIOHERB_NE_MASTER_STRENGTHENING",
+		false,
+	)
+		_add_multisector_bioherb_ne_master_strengthening!(planning_problem)
+	end
 
 	add_approximate_variable_cost!(planning_problem,length(linking_variables_sub));
 
