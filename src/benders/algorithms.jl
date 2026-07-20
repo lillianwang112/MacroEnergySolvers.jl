@@ -302,6 +302,7 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 	if feasibility_proximal && checkpoint_config.replay
 		saved_center = _read_feasibility_proximal_center(checkpoint_config.directory)
 		center_restored = false
+		recovered_center = nothing
 		if !isnothing(saved_center)
 			if saved_center.cut_count == length(replayed_feasibility_cuts)
 				missing_center_variables = filter(
@@ -326,20 +327,38 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 				)
 				center_restored = true
 				@info "FEASIBILITY_PROXIMAL_CENTER_RESTORED: cuts=$(saved_center.cut_count) variables=$(length(saved_center.values)) path=$(saved_center.path)"
+			elseif saved_center.cut_count < length(replayed_feasibility_cuts)
+				recovered_values = copy(planning_sol.values)
+				for (variable_name, variable_value) in saved_center.values
+					haskey(recovered_values, variable_name) || error(
+						"FEASIBILITY_PROXIMAL_CENTER_REPLAY_UNKNOWN_VARIABLE: $variable_name",
+					)
+					recovered_values[variable_name] = variable_value
+				end
+				recovered_center = (
+					planning_cost=saved_center.planning_cost,
+					values=recovered_values,
+				)
+				@warn "FEASIBILITY_PROXIMAL_CENTER_ADVANCING: saved cuts=$(saved_center.cut_count) replayed cuts=$(length(replayed_feasibility_cuts)); projecting the saved center through the newer cuts"
 			else
-				@warn "FEASIBILITY_PROXIMAL_CENTER_IGNORED: saved cuts=$(saved_center.cut_count) replayed cuts=$(length(replayed_feasibility_cuts)); reconstructing from the latest complete generating point"
+				error(
+					"FEASIBILITY_PROXIMAL_CENTER_AHEAD: saved cuts=$(saved_center.cut_count) " *
+					"exceed replayed cuts=$(length(replayed_feasibility_cuts))",
+				)
 			end
 		end
 
 		if !center_restored
-			recovered_center = _recover_latest_feasibility_generating_point(
-				replayed_feasibility_cuts,
-				planning_sol,
-			)
+			if isnothing(recovered_center)
+				recovered_center = _recover_latest_feasibility_generating_point(
+					replayed_feasibility_cuts,
+					planning_sol,
+				)
+				@info "FEASIBILITY_PROXIMAL_CENTER_RECOVERED: iteration=$(recovered_center.latest_iteration) cuts=$(recovered_center.cuts) variables=$(recovered_center.recovered_variables); projecting it through the fully replayed master before the first subproblem evaluation"
+			end
 			isnothing(recovered_center) && error(
 				"FEASIBILITY_PROXIMAL_CENTER_RECOVERY_FAILED: no replayed cuts",
 			)
-			@info "FEASIBILITY_PROXIMAL_CENTER_RECOVERED: iteration=$(recovered_center.latest_iteration) cuts=$(recovered_center.cuts) variables=$(recovered_center.recovered_variables); projecting it through the fully replayed master before the first subproblem evaluation"
 			planning_sol = solve_feasibility_proximal_problem(
 				planning_problem,
 				planning_variables,
@@ -514,6 +533,8 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 		planning_sol_hist = [planning_sol.values[s] for s in planning_variables]
 		@info "ORACLE_SEED_OPERATIONAL_VALID: subproblems=$(length(oracle_subop_sol)) planning_cost=$(oracle_planning_sol.planning_cost) operational_cost=$(sum(sol.op_cost for sol in values(oracle_subop_sol))) initial_UB=$(UB)"
 	end
+	feasibility_proximal_anchor = deepcopy(planning_sol)
+	feasibility_proximal_best_violation = Inf
 
 	for k = 0:MaxIter
 
@@ -529,7 +550,15 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 			sol.op_cost for sol in values(subop_sol) if sol.theta_coeff == 0
 		]
 		if !isempty(phase1_objectives)
-			@info "PHASE1_ITERATION_SUMMARY: k=$(k) infeasible=$(length(phase1_objectives))/$(length(subop_sol)) min=$(minimum(phase1_objectives)) max=$(maximum(phase1_objectives)) sum=$(sum(phase1_objectives))"
+			phase1_total = sum(phase1_objectives)
+			@info "PHASE1_ITERATION_SUMMARY: k=$(k) infeasible=$(length(phase1_objectives))/$(length(subop_sol)) min=$(minimum(phase1_objectives)) max=$(maximum(phase1_objectives)) sum=$(phase1_total)"
+			if feasibility_proximal &&
+					length(phase1_objectives) == length(subop_sol) &&
+					phase1_total < feasibility_proximal_best_violation
+				feasibility_proximal_best_violation = phase1_total
+				feasibility_proximal_anchor = deepcopy(planning_sol)
+				@info "FEASIBILITY_PROXIMAL_INCUMBENT_UPDATED: k=$(k) phase1_sum=$(phase1_total)"
+			end
 		end
 
 		UBnew = compute_upper_bound(planning_problem,planning_sol,subop_sol);
@@ -732,7 +761,7 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 					planning_problem,
 					planning_variables,
 					unst_planning_sol,
-					planning_sol,
+					feasibility_proximal_anchor,
 				)
 				if checkpoint_config.write && checkpoint_exact_feasibility_phase
 					center_path = _write_feasibility_proximal_center(
