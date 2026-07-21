@@ -103,6 +103,22 @@ using JuMP
             7.0,
             MOI.EqualTo(5.0),
         ) == 2.0
+
+        registry_model = Model()
+        @variable(registry_model, z)
+        @constraint(registry_model, phase1_less, z <= 1.0)
+        @constraint(registry_model, phase1_greater, z >= -1.0)
+        @constraint(registry_model, phase1_equal, z == 0.0)
+        MacroEnergySolvers.add_slacks_to_subproblem!(registry_model)
+        @test Set(name.(registry_model[:phase1_original_constraints])) == Set([
+            "phase1_less",
+            "phase1_greater",
+            "phase1_equal",
+        ])
+        @test all(
+            constraint -> !startswith(name(constraint), "slack"),
+            registry_model[:phase1_original_constraints],
+        )
     end
     @testset "Multisector biomass master strengthening" begin
         model = Model()
