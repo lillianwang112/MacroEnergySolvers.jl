@@ -38,11 +38,15 @@ function add_slacks_to_subproblem!(subproblem::Model)
     # epigraph constraints.  An opt-in audit can then attribute the relaxed
     # infeasibility to exact model rows instead of reporting the much less
     # informative IIS produced by the strict final solve.
-    subproblem[:phase1_original_constraints] = Any[
-        eq_cons...
-        less_ineq_cons...
-        greater_ineq_cons...
-    ]
+    phase1_original_constraints = Any[]
+    sizehint!(
+        phase1_original_constraints,
+        length(eq_cons) + length(less_ineq_cons) + length(greater_ineq_cons),
+    )
+    append!(phase1_original_constraints, eq_cons)
+    append!(phase1_original_constraints, less_ineq_cons)
+    append!(phase1_original_constraints, greater_ineq_cons)
+    subproblem[:phase1_original_constraints] = phase1_original_constraints
 
 
     @variable(subproblem, slack_max)

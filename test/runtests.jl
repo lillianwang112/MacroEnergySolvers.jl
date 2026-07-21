@@ -119,6 +119,21 @@ using JuMP
             constraint -> !startswith(name(constraint), "slack"),
             registry_model[:phase1_original_constraints],
         )
+
+        # A full operational model has a very large number of rows. Building
+        # this registry must stay linear instead of invoking Julia's typed_vcat
+        # machinery on thousands of splatted ConstraintRefs.
+        large_registry_model = Model()
+        @variable(large_registry_model, large_z)
+        @constraint(
+            large_registry_model,
+            many_phase1_rows[i in 1:10_000],
+            large_z <= Float64(i),
+        )
+        MacroEnergySolvers.add_slacks_to_subproblem!(large_registry_model)
+        @test length(
+            large_registry_model[:phase1_original_constraints],
+        ) == 10_000
     end
     @testset "Multisector biomass master strengthening" begin
         model = Model()
