@@ -34,19 +34,59 @@ function _infer_nonnegative_linking_bound(variable_name::String)
 	return true
 end
 
-const _MULTISECTOR_BIOHERB_NE_CAPACITY_COEFFICIENTS = (
-	("vCAP_NE_Bio_NaturalGas_Herb_biomass_edge_period1", 0.85),
-	("vCAP_NE_BECCS_NaturalGas_Herb_biomass_edge_period1", 0.85),
-	("vCAP_NE_BECCS_H2_Herb_biomass_edge_period1", 0.85),
-	("vCAP_NE_Bio_Gasoline_Herb_biomass_edge_period1", 0.85),
-	("vCAP_NE_BECCS_Electricity_Herb_biomass_edge_period1", 0.40),
-	("vCAP_NE_Bio_FT_Herb_biomass_edge_period1", 0.85),
-	("vCAP_NE_BECCS_FT_Herb_biomass_edge_period1", 0.85),
+function _multisector_biomass_capacity_coefficients(
+	region::String,
+	feedstock::String,
 )
+	technologies = (
+		("Bio_NaturalGas", 0.85),
+		("BECCS_NaturalGas", 0.85),
+		("BECCS_H2", 0.85),
+		("Bio_Gasoline", 0.85),
+		("BECCS_Electricity", 0.40),
+		("Bio_FT", 0.85),
+		("BECCS_FT", 0.85),
+	)
+	return Tuple(
+		(
+			"vCAP_$(region)_$(technology)_$(feedstock)_biomass_edge_period1",
+			coefficient,
+		) for (technology, coefficient) in technologies
+	)
+end
 
-const _MULTISECTOR_BIOHERB_NE_SUPPLY_LIMIT = 297.76
-const _MULTISECTOR_BIOHERB_NE_CONSTRAINT_NAME =
-	"BendersMasterStrengthening_bioherb_NE_period1"
+const _MULTISECTOR_BIOMASS_SUPPLY_GROUPS = (
+	(
+		node="bioherb_MIDAT",
+		limit=1364.89,
+		coefficients=_multisector_biomass_capacity_coefficients("MIDAT", "Herb"),
+	),
+	(
+		node="bioherb_NE",
+		limit=297.76,
+		coefficients=_multisector_biomass_capacity_coefficients("NE", "Herb"),
+	),
+	(
+		node="bioherb_SE",
+		limit=7963.12,
+		coefficients=_multisector_biomass_capacity_coefficients("SE", "Herb"),
+	),
+	(
+		node="biowood_MIDAT",
+		limit=6110.82,
+		coefficients=_multisector_biomass_capacity_coefficients("MIDAT", "Wood"),
+	),
+	(
+		node="biowood_NE",
+		limit=1905.74,
+		coefficients=_multisector_biomass_capacity_coefficients("NE", "Wood"),
+	),
+	(
+		node="biowood_SE",
+		limit=11160.76,
+		coefficients=_multisector_biomass_capacity_coefficients("SE", "Wood"),
+	),
+)
 
 """
 	_add_named_capacity_supply_constraint!(model, coefficients, rhs; name)
@@ -92,27 +132,37 @@ function _add_named_capacity_supply_constraint!(
 end
 
 """
-	_add_multisector_bioherb_ne_master_strengthening!(planning_problem)
+	_add_multisector_biomass_master_strengthening!(planning_problem)
 
-Add the operationally implied `bioherb_NE` capacity inequality for the
-official three-zone multisector case. Every listed process draws from the
-same finite, supply-only `bioherb_NE` vertex and has an unconditional minimum
-flow equal to the listed fraction of installed input-edge capacity.
+Add operationally implied capacity inequalities for the six finite,
+supply-only regional herb/wood biomass vertices in the official three-zone
+multisector case. Every listed process has an unconditional minimum input
+flow equal to the corresponding fraction of installed biomass-edge capacity.
 """
-function _add_multisector_bioherb_ne_master_strengthening!(planning_problem::Model)
-	constraint = _add_named_capacity_supply_constraint!(
-		planning_problem,
-		_MULTISECTOR_BIOHERB_NE_CAPACITY_COEFFICIENTS,
-		_MULTISECTOR_BIOHERB_NE_SUPPLY_LIMIT;
-		name=_MULTISECTOR_BIOHERB_NE_CONSTRAINT_NAME,
-	)
+function _add_multisector_biomass_master_strengthening!(planning_problem::Model)
+	constraints = ConstraintRef[]
+	for group in _MULTISECTOR_BIOMASS_SUPPLY_GROUPS
+		constraint_name =
+			"BendersMasterStrengthening_$(group.node)_period1"
+		constraint = _add_named_capacity_supply_constraint!(
+			planning_problem,
+			group.coefficients,
+			group.limit;
+			name=constraint_name,
+		)
+		push!(constraints, constraint)
+		@info(
+			"MULTISECTOR_BIOMASS_MASTER_STRENGTHENING_ADDED: " *
+			"node=$(group.node) terms=$(length(group.coefficients)) " *
+			"rhs=$(group.limit) constraint=$constraint_name",
+		)
+	end
 	@info(
-		"MULTISECTOR_BIOHERB_NE_MASTER_STRENGTHENING_ADDED: " *
-		"terms=$(length(_MULTISECTOR_BIOHERB_NE_CAPACITY_COEFFICIENTS)) " *
-		"rhs=$(_MULTISECTOR_BIOHERB_NE_SUPPLY_LIMIT) " *
-		"constraint=$(_MULTISECTOR_BIOHERB_NE_CONSTRAINT_NAME)",
+		"MULTISECTOR_BIOMASS_MASTER_STRENGTHENING_COMPLETE: " *
+		"groups=$(length(constraints)) " *
+		"terms=$(sum(length(group.coefficients) for group in _MULTISECTOR_BIOMASS_SUPPLY_GROUPS))",
 	)
-	return constraint
+	return constraints
 end
 
 """
@@ -212,11 +262,15 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 	end
 	@info("Enforced lower bound ≥ 0 on $n_bounds_added/$(length(non_neg_var_names)) inferred-nonnegative linking variables (of $(length(all_linking_var_names)) total; signed net-policy Budget/vSTOR_CHANGE variables remain free)")
 
-	if _checkpoint_env_flag(
+	biomass_master_strengthening = _checkpoint_env_flag(
+		"BENDERS_MULTISECTOR_BIOMASS_MASTER_STRENGTHENING",
+		false,
+	) || _checkpoint_env_flag(
 		"BENDERS_MULTISECTOR_BIOHERB_NE_MASTER_STRENGTHENING",
 		false,
 	)
-		_add_multisector_bioherb_ne_master_strengthening!(planning_problem)
+	if biomass_master_strengthening
+		_add_multisector_biomass_master_strengthening!(planning_problem)
 	end
 
 	add_approximate_variable_cost!(planning_problem,length(linking_variables_sub));

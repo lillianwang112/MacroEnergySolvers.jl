@@ -63,50 +63,62 @@ using JuMP
             "vCAP_SE_solar_photovoltaic_1_period1",
         )
     end
-    @testset "Multisector bioherb NE master strengthening" begin
+    @testset "Multisector biomass master strengthening" begin
         model = Model()
         variables = Dict{String,VariableRef}()
-        for (variable_name, _) in
-            MacroEnergySolvers._MULTISECTOR_BIOHERB_NE_CAPACITY_COEFFICIENTS
-            variables[variable_name] = @variable(model, base_name=variable_name)
+        for group in MacroEnergySolvers._MULTISECTOR_BIOMASS_SUPPLY_GROUPS
+            for (variable_name, _) in group.coefficients
+                variables[variable_name] = @variable(model, base_name=variable_name)
+            end
         end
 
-        constraint = MacroEnergySolvers._add_multisector_bioherb_ne_master_strengthening!(
+        constraints = MacroEnergySolvers._add_multisector_biomass_master_strengthening!(
             model,
         )
-        @test name(constraint) ==
-            MacroEnergySolvers._MULTISECTOR_BIOHERB_NE_CONSTRAINT_NAME
-        constraint_data = constraint_object(constraint)
-        @test constraint_data.set.upper ==
-            MacroEnergySolvers._MULTISECTOR_BIOHERB_NE_SUPPLY_LIMIT
-        @test JuMP.constant(constraint_data.func) == 0.0
-        for (variable_name, coefficient) in
-            MacroEnergySolvers._MULTISECTOR_BIOHERB_NE_CAPACITY_COEFFICIENTS
-            @test JuMP.coefficient(
-                constraint_data.func,
-                variables[variable_name],
-            ) == coefficient
+        @test length(constraints) == 6
+        for (constraint, group) in zip(
+            constraints,
+            MacroEnergySolvers._MULTISECTOR_BIOMASS_SUPPLY_GROUPS,
+        )
+            @test name(constraint) ==
+                "BendersMasterStrengthening_$(group.node)_period1"
+            constraint_data = constraint_object(constraint)
+            @test constraint_data.set.upper == group.limit
+            @test JuMP.constant(constraint_data.func) == 0.0
+            for (variable_name, coefficient) in group.coefficients
+                @test JuMP.coefficient(
+                    constraint_data.func,
+                    variables[variable_name],
+                ) == coefficient
+            end
         end
 
         # The exact single-technology ray from the Della diagnostic is cut
         # off, while the known monolithic capacity remains feasible.
         ne_ft = variables["vCAP_NE_BECCS_FT_Herb_biomass_edge_period1"]
-        @test 0.85 * 697.788922721467 >
-            MacroEnergySolvers._MULTISECTOR_BIOHERB_NE_SUPPLY_LIMIT
-        @test 0.85 * 330.84444 <
-            MacroEnergySolvers._MULTISECTOR_BIOHERB_NE_SUPPLY_LIMIT
-        @test JuMP.coefficient(constraint_data.func, ne_ft) == 0.85
+        ne_herb_constraint = constraint_object(constraint_by_name(
+            model,
+            "BendersMasterStrengthening_bioherb_NE_period1",
+        ))
+        @test 0.85 * 697.788922721467 > 297.76
+        @test 0.85 * 330.84444 < 297.76
+        @test JuMP.coefficient(ne_herb_constraint.func, ne_ft) == 0.85
 
-        @test_throws ErrorException MacroEnergySolvers._add_multisector_bioherb_ne_master_strengthening!(
+        # The two wood-capacity combinations reported by the strict final IIS
+        # in job 11429292 also violate their corresponding aggregate limits.
+        @test 11357.589421229883 > 11160.76
+        @test 2015.0486799642754 > 1905.74
+
+        @test_throws ErrorException MacroEnergySolvers._add_multisector_biomass_master_strengthening!(
             model,
         )
 
         incomplete_model = Model()
-        first_name = first(
-            MacroEnergySolvers._MULTISECTOR_BIOHERB_NE_CAPACITY_COEFFICIENTS,
-        )[1]
+        first_name = first(first(
+            MacroEnergySolvers._MULTISECTOR_BIOMASS_SUPPLY_GROUPS,
+        ).coefficients)[1]
         @variable(incomplete_model, base_name=first_name)
-        @test_throws ErrorException MacroEnergySolvers._add_multisector_bioherb_ne_master_strengthening!(
+        @test_throws ErrorException MacroEnergySolvers._add_multisector_biomass_master_strengthening!(
             incomplete_model,
         )
     end
