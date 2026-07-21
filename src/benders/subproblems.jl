@@ -26,6 +26,23 @@ function add_slacks_to_local_subproblems!(subproblem_local::Vector{Dict{Any,Any}
 end
 
 
+_phase1_structured_slack_enabled() =
+    lowercase(get(ENV, "BENDERS_PHASE1_STRUCTURED_SLACK", "false")) == "true"
+
+
+function _phase1_structured_slack_weight()
+    raw_weight = get(ENV, "BENDERS_PHASE1_STRUCTURED_SLACK_WEIGHT", "1.0")
+    weight = tryparse(Float64, raw_weight)
+    isnothing(weight) && error(
+        "BENDERS_PHASE1_STRUCTURED_SLACK_WEIGHT must be numeric; got $(repr(raw_weight))",
+    )
+    isfinite(weight) && weight > 0.0 || error(
+        "BENDERS_PHASE1_STRUCTURED_SLACK_WEIGHT must be finite and positive; got $(weight)",
+    )
+    return weight
+end
+
+
 function add_slacks_to_subproblem!(subproblem::Model)
     ### Slack variables are added to the subproblems and fixed to zero. 
     ### We will then allow slack variables to be non-zero to generate feasibility cuts when a subproblem is infeasible.
@@ -49,29 +66,116 @@ function add_slacks_to_subproblem!(subproblem::Model)
     subproblem[:phase1_original_constraints] = phase1_original_constraints
 
 
+    structured_slack = _phase1_structured_slack_enabled()
+    structured_slack_weight = structured_slack ?
+        _phase1_structured_slack_weight() : 0.0
+
     @variable(subproblem, slack_max)
     @constraint(subproblem, slack_max >= 0)
 
-    if !isempty(less_ineq_cons)
-        for c in less_ineq_cons
-            set_normalized_coefficient(c, slack_max, -1)
-        end
-    end
+    if structured_slack
+        n_less = length(less_ineq_cons)
+        n_greater = length(greater_ineq_cons)
+        n_equal = length(eq_cons)
+        n_original = n_less + n_greater + n_equal
 
-    if !isempty(greater_ineq_cons)
-        for c in greater_ineq_cons
-            set_normalized_coefficient(c, slack_max, 1)
+        if n_less > 0
+            @variable(subproblem, phase1_slack_less[1:n_less] >= 0)
+            for i in 1:n_less
+                set_normalized_coefficient(
+                    less_ineq_cons[i],
+                    phase1_slack_less[i],
+                    -1,
+                )
+            end
+            @constraint(
+                subproblem,
+                [i in 1:n_less],
+                phase1_slack_less[i] <= slack_max,
+            )
         end
-    end
 
-    if !isempty(eq_cons)
-        n = length(eq_cons)
-        @variable(subproblem, slack_eq[1:n])
-        for i in 1:n
-            set_normalized_coefficient(eq_cons[i], slack_eq[i], -1)
+        if n_greater > 0
+            @variable(subproblem, phase1_slack_greater[1:n_greater] >= 0)
+            for i in 1:n_greater
+                set_normalized_coefficient(
+                    greater_ineq_cons[i],
+                    phase1_slack_greater[i],
+                    1,
+                )
+            end
+            @constraint(
+                subproblem,
+                [i in 1:n_greater],
+                phase1_slack_greater[i] <= slack_max,
+            )
         end
-        @constraint(subproblem, [i in 1:n], slack_eq[i] <= slack_max)
-        @constraint(subproblem, [i in 1:n], -slack_eq[i] <= slack_max)
+
+        if n_equal > 0
+            @variable(subproblem, slack_eq[1:n_equal])
+            @variable(subproblem, phase1_slack_eq_abs[1:n_equal] >= 0)
+            for i in 1:n_equal
+                set_normalized_coefficient(eq_cons[i], slack_eq[i], -1)
+            end
+            @constraint(
+                subproblem,
+                [i in 1:n_equal],
+                slack_eq[i] <= phase1_slack_eq_abs[i],
+            )
+            @constraint(
+                subproblem,
+                [i in 1:n_equal],
+                -slack_eq[i] <= phase1_slack_eq_abs[i],
+            )
+            @constraint(
+                subproblem,
+                [i in 1:n_equal],
+                phase1_slack_eq_abs[i] <= slack_max,
+            )
+        end
+
+        total_row_slack = AffExpr(0.0)
+        n_less > 0 && foreach(
+            variable -> add_to_expression!(total_row_slack, variable),
+            phase1_slack_less,
+        )
+        n_greater > 0 && foreach(
+            variable -> add_to_expression!(total_row_slack, variable),
+            phase1_slack_greater,
+        )
+        n_equal > 0 && foreach(
+            variable -> add_to_expression!(total_row_slack, variable),
+            phase1_slack_eq_abs,
+        )
+        average_row_slack = n_original == 0 ?
+            AffExpr(0.0) : total_row_slack / n_original
+        phase1_objective = slack_max +
+            structured_slack_weight * average_row_slack
+        subproblem[:phase1_feasibility_objective] = phase1_objective
+        @info "PHASE1_STRUCTURED_SLACK_ADDED: original_rows=$(n_original) equality_rows=$(n_equal) less_than_rows=$(n_less) greater_than_rows=$(n_greater) average_weight=$(structured_slack_weight)"
+    else
+        if !isempty(less_ineq_cons)
+            for c in less_ineq_cons
+                set_normalized_coefficient(c, slack_max, -1)
+            end
+        end
+
+        if !isempty(greater_ineq_cons)
+            for c in greater_ineq_cons
+                set_normalized_coefficient(c, slack_max, 1)
+            end
+        end
+
+        if !isempty(eq_cons)
+            n = length(eq_cons)
+            @variable(subproblem, slack_eq[1:n])
+            for i in 1:n
+                set_normalized_coefficient(eq_cons[i], slack_eq[i], -1)
+            end
+            @constraint(subproblem, [i in 1:n], slack_eq[i] <= slack_max)
+            @constraint(subproblem, [i in 1:n], -slack_eq[i] <= slack_max)
+        end
+        subproblem[:phase1_feasibility_objective] = 1.0 * slack_max
     end
 
     # Add Big-M penalty to objective so elastic slack mode has a proper cost signal.
@@ -93,7 +197,9 @@ end
 
 _is_phase1_slack_variable(variable::VariableRef) = begin
     variable_name = name(variable)
-    variable_name == "slack_max" || startswith(variable_name, "slack_eq[")
+    variable_name == "slack_max" ||
+        startswith(variable_name, "slack_eq[") ||
+        startswith(variable_name, "phase1_slack_")
 end
 
 function _phase1_hard_activity(
@@ -652,7 +758,8 @@ function solve_subproblem(m::Model,planning_sol::NamedTuple,linking_variables_su
 
             is_fixed(m[:slack_max]) && unfix(m[:slack_max])
             objfun = objective_function(m)
-            @objective(m, Min, m[:slack_max])
+            set_objective_sense(m, MOI.MIN_SENSE)
+            set_objective_function(m, m[:phase1_feasibility_objective])
             original_method = optimizer_attribute_or_missing(m, "Method")
             original_crossover = optimizer_attribute_or_missing(m, "Crossover")
             original_numeric_focus = optimizer_attribute_or_missing(m, "NumericFocus")

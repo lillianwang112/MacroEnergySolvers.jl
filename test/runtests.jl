@@ -135,6 +135,113 @@ using JuMP
             large_registry_model[:phase1_original_constraints],
         ) == 10_000
     end
+    @testset "Legacy Phase-I slack remains the default" begin
+        structured_key = "BENDERS_PHASE1_STRUCTURED_SLACK"
+        original_structured = get(ENV, structured_key, nothing)
+        try
+            ENV[structured_key] = "false"
+            model = Model()
+            @variable(model, x)
+            @constraint(model, legacy_less, x <= 1.0)
+            @constraint(model, legacy_greater, x >= -1.0)
+            MacroEnergySolvers.add_slacks_to_subproblem!(model)
+
+            slack_max = model[:slack_max]
+            @test coefficient(
+                constraint_object(model[:legacy_less]).func,
+                slack_max,
+            ) == -1.0
+            @test coefficient(
+                constraint_object(model[:legacy_greater]).func,
+                slack_max,
+            ) == 1.0
+            @test coefficient(
+                model[:phase1_feasibility_objective],
+                slack_max,
+            ) == 1.0
+            @test !haskey(object_dictionary(model), :phase1_slack_less)
+            @test !haskey(object_dictionary(model), :phase1_slack_greater)
+        finally
+            isnothing(original_structured) ?
+                delete!(ENV, structured_key) :
+                (ENV[structured_key] = original_structured)
+        end
+    end
+    @testset "Structured Phase-I slacks" begin
+        structured_key = "BENDERS_PHASE1_STRUCTURED_SLACK"
+        weight_key = "BENDERS_PHASE1_STRUCTURED_SLACK_WEIGHT"
+        original_structured = get(ENV, structured_key, nothing)
+        original_weight = get(ENV, weight_key, nothing)
+        try
+            ENV[structured_key] = "true"
+            ENV[weight_key] = "2.0"
+
+            model = Model()
+            @variable(model, x)
+            @constraint(model, structured_less, x <= 1.0)
+            @constraint(model, structured_greater, x >= -1.0)
+            @constraint(model, structured_equal, x == 0.0)
+            MacroEnergySolvers.add_slacks_to_subproblem!(model)
+
+            slack_max = model[:slack_max]
+            less_slack = only(model[:phase1_slack_less])
+            greater_slack = only(model[:phase1_slack_greater])
+            equality_slack = only(model[:slack_eq])
+            equality_abs_slack = only(model[:phase1_slack_eq_abs])
+
+            @test is_fixed(slack_max)
+            @test fix_value(slack_max) == 0.0
+            @test coefficient(
+                constraint_object(model[:structured_less]).func,
+                less_slack,
+            ) == -1.0
+            @test coefficient(
+                constraint_object(model[:structured_less]).func,
+                slack_max,
+            ) == 0.0
+            @test coefficient(
+                constraint_object(model[:structured_greater]).func,
+                greater_slack,
+            ) == 1.0
+            @test coefficient(
+                constraint_object(model[:structured_equal]).func,
+                equality_slack,
+            ) == -1.0
+
+            phase1_objective = model[:phase1_feasibility_objective]
+            @test coefficient(phase1_objective, slack_max) == 1.0
+            @test coefficient(phase1_objective, less_slack) ≈ 2.0 / 3.0
+            @test coefficient(phase1_objective, greater_slack) ≈ 2.0 / 3.0
+            @test coefficient(phase1_objective, equality_abs_slack) ≈ 2.0 / 3.0
+            @test coefficient(phase1_objective, equality_slack) == 0.0
+            @test all(
+                MacroEnergySolvers._is_phase1_slack_variable,
+                [
+                    slack_max,
+                    less_slack,
+                    greater_slack,
+                    equality_slack,
+                    equality_abs_slack,
+                ],
+            )
+
+            ENV[weight_key] = "not-a-number"
+            @test_throws ErrorException (
+                MacroEnergySolvers._phase1_structured_slack_weight()
+            )
+            ENV[weight_key] = "0.0"
+            @test_throws ErrorException (
+                MacroEnergySolvers._phase1_structured_slack_weight()
+            )
+        finally
+            isnothing(original_structured) ?
+                delete!(ENV, structured_key) :
+                (ENV[structured_key] = original_structured)
+            isnothing(original_weight) ?
+                delete!(ENV, weight_key) :
+                (ENV[weight_key] = original_weight)
+        end
+    end
     @testset "Multisector biomass master strengthening" begin
         model = Model()
         variables = Dict{String,VariableRef}()
