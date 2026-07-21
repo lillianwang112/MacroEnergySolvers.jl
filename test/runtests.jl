@@ -63,6 +63,47 @@ using JuMP
             "vCAP_SE_solar_photovoltaic_1_period1",
         )
     end
+    @testset "Phase-I hard-constraint attribution" begin
+        model = Model()
+        @variable(model, x)
+        @variable(model, slack_max)
+        @variable(model, slack_eq[1:1])
+        values = Dict(
+            x => 7.0,
+            slack_max => 3.0,
+            slack_eq[1] => -2.0,
+        )
+
+        less_expr = 2.0 * x - slack_max
+        greater_expr = x + slack_max
+        equality_expr = x - slack_eq[1]
+        variable_value(variable) = values[variable]
+
+        @test MacroEnergySolvers._phase1_hard_activity(
+            less_expr,
+            variable_value,
+        ) == 14.0
+        @test MacroEnergySolvers._phase1_hard_activity(
+            greater_expr,
+            variable_value,
+        ) == 7.0
+        @test MacroEnergySolvers._phase1_hard_activity(
+            equality_expr,
+            variable_value,
+        ) == 7.0
+        @test MacroEnergySolvers._phase1_hard_violation(
+            14.0,
+            MOI.LessThan(10.0),
+        ) == 4.0
+        @test MacroEnergySolvers._phase1_hard_violation(
+            7.0,
+            MOI.GreaterThan(9.0),
+        ) == 2.0
+        @test MacroEnergySolvers._phase1_hard_violation(
+            7.0,
+            MOI.EqualTo(5.0),
+        ) == 2.0
+    end
     @testset "Multisector biomass master strengthening" begin
         model = Model()
         variables = Dict{String,VariableRef}()

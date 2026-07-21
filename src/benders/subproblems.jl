@@ -34,6 +34,16 @@ function add_slacks_to_subproblem!(subproblem::Model)
     less_ineq_cons = all_constraints(subproblem,AffExpr,MOI.LessThan{Float64})
     greater_ineq_cons = all_constraints(subproblem,AffExpr,MOI.GreaterThan{Float64})
 
+    # Preserve the original structural rows before adding the Phase-I
+    # epigraph constraints.  An opt-in audit can then attribute the relaxed
+    # infeasibility to exact model rows instead of reporting the much less
+    # informative IIS produced by the strict final solve.
+    subproblem[:phase1_original_constraints] = Any[
+        eq_cons...
+        less_ineq_cons...
+        greater_ineq_cons...
+    ]
+
 
     @variable(subproblem, slack_max)
     @constraint(subproblem, slack_max >= 0)
@@ -73,6 +83,115 @@ function add_slacks_to_subproblem!(subproblem::Model)
     set_objective_function(subproblem, objfun + big_m * slack_max)
 
     fix.(slack_max,0.0);
+
+    return nothing
+end
+
+_is_phase1_slack_variable(variable::VariableRef) = begin
+    variable_name = name(variable)
+    variable_name == "slack_max" || startswith(variable_name, "slack_eq[")
+end
+
+function _phase1_hard_activity(
+    func::AffExpr,
+    variable_value::Function,
+)
+    return value(
+        variable -> _is_phase1_slack_variable(variable) ? 0.0 : variable_value(variable),
+        func,
+    )
+end
+
+function _phase1_hard_violation(activity::Real, set::MOI.LessThan)
+    return max(0.0, Float64(activity) - set.upper)
+end
+
+
+function _phase1_hard_violation(activity::Real, set::MOI.GreaterThan)
+    return max(0.0, set.lower - Float64(activity))
+end
+
+
+function _phase1_hard_violation(activity::Real, set::MOI.EqualTo)
+    return abs(Float64(activity) - set.value)
+end
+
+
+_phase1_set_description(set::MOI.LessThan) = "LessThan($(set.upper))"
+_phase1_set_description(set::MOI.GreaterThan) = "GreaterThan($(set.lower))"
+_phase1_set_description(set::MOI.EqualTo) = "EqualTo($(set.value))"
+
+function _audit_phase1_constraint_attribution!(
+    m::Model,
+    subproblem_index,
+    phase1_objective::Real,
+)
+    get(ENV, "BENDERS_PHASE1_CONSTRAINT_AUDIT", "false") == "true" || return
+
+    top_n = tryparse(
+        Int,
+        get(ENV, "BENDERS_PHASE1_CONSTRAINT_AUDIT_TOP", "25"),
+    )
+    isnothing(top_n) && error(
+        "BENDERS_PHASE1_CONSTRAINT_AUDIT_TOP must be an integer",
+    )
+    top_n > 0 || error(
+        "BENDERS_PHASE1_CONSTRAINT_AUDIT_TOP must be positive",
+    )
+
+    constraints = try
+        m[:phase1_original_constraints]
+    catch
+        error(
+            "BENDERS_PHASE1_CONSTRAINT_AUDIT requires the original " *
+            "constraint registry created by add_slacks_to_subproblem!",
+        )
+    end
+
+    rows = NamedTuple[]
+    for (constraint_index, constraint) in enumerate(constraints)
+        constraint_data = constraint_object(constraint)
+        activity = _phase1_hard_activity(
+            constraint_data.func,
+            variable -> value(variable),
+        )
+        hard_violation = _phase1_hard_violation(
+            activity,
+            constraint_data.set,
+        )
+        dual_value = dual(constraint)
+        constraint_name = name(constraint)
+        isempty(constraint_name) &&
+            (constraint_name = "<anonymous_original_constraint_$(constraint_index)>")
+        push!(rows, (
+            index=constraint_index,
+            name=constraint_name,
+            set=_phase1_set_description(constraint_data.set),
+            activity=Float64(activity),
+            hard_violation=hard_violation,
+            dual=Float64(dual_value),
+            abs_dual=abs(Float64(dual_value)),
+        ))
+    end
+
+    nonzero_dual_rows = filter(row -> row.abs_dual > 1e-8, rows)
+    violated_rows = filter(row -> row.hard_violation > 1e-8, rows)
+    total_abs_dual = sum(row.abs_dual for row in nonzero_dual_rows)
+    max_hard_violation = isempty(violated_rows) ? 0.0 : maximum(
+        row.hard_violation for row in violated_rows
+    )
+    @info "PHASE1_CONSTRAINT_AUDIT_SUMMARY: w=$(subproblem_index) phase1_objective=$(phase1_objective) original_constraints=$(length(rows)) nonzero_duals=$(length(nonzero_dual_rows)) hard_violations=$(length(violated_rows)) max_hard_violation=$(max_hard_violation) total_abs_dual=$(total_abs_dual)"
+
+    by_dual = sort(rows; by=row -> (-row.abs_dual, -row.hard_violation))
+    for (rank, row) in enumerate(first(by_dual, min(top_n, length(by_dual))))
+        dual_share = total_abs_dual > 0.0 ? row.abs_dual / total_abs_dual : 0.0
+        @info "PHASE1_CONSTRAINT_DUAL: w=$(subproblem_index) rank=$(rank) name=$(repr(row.name)) set=$(row.set) activity=$(row.activity) hard_violation=$(row.hard_violation) dual=$(row.dual) abs_dual_share=$(dual_share)"
+    end
+
+    by_violation = sort(rows; by=row -> (-row.hard_violation, -row.abs_dual))
+    for (rank, row) in enumerate(first(by_violation, min(top_n, length(by_violation))))
+        @info "PHASE1_CONSTRAINT_VIOLATION: w=$(subproblem_index) rank=$(rank) name=$(repr(row.name)) set=$(row.set) activity=$(row.activity) hard_violation=$(row.hard_violation) dual=$(row.dual)"
+    end
 
     return nothing
 end
@@ -560,6 +679,12 @@ function solve_subproblem(m::Model,planning_sol::NamedTuple,linking_variables_su
                 if !isfinite(relative_duality_gap) || relative_duality_gap > duality_tolerance
                     error("Phase-I primal/dual objective mismatch: relative_gap=$(relative_duality_gap) > tolerance=$(duality_tolerance). Refusing to generate an invalid feasibility cut.")
                 end
+
+                _audit_phase1_constraint_attribution!(
+                    m,
+                    subproblem_index,
+                    op_cost,
+                )
 
                 lambda = [dual(FixRef(variable_by_name(m,y))) for y in linking_variables_sub]
                 theta_coeff = 0
