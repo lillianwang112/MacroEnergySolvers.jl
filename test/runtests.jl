@@ -494,6 +494,86 @@ using JuMP
             end
         end
     end
+    @testset "Penalized feasibility phase settings and bounds" begin
+        environment_names = (
+            "BENDERS_PENALIZED_FEASIBILITY_PHASE",
+            "BENDERS_PENALIZED_FEASIBILITY_INITIAL_PENALTY",
+            "BENDERS_PENALIZED_FEASIBILITY_PENALTY_MULTIPLIER",
+            "BENDERS_PENALIZED_FEASIBILITY_MAXIMUM_PENALTY",
+            "BENDERS_PENALIZED_FEASIBILITY_STALL_ITERATIONS",
+            "BENDERS_PENALIZED_FEASIBILITY_SLACK_TOLERANCE",
+        )
+        original_values = Dict(
+            name => get(ENV, name, nothing) for name in environment_names
+        )
+        try
+            ENV["BENDERS_PENALIZED_FEASIBILITY_PHASE"] = "true"
+            ENV["BENDERS_PENALIZED_FEASIBILITY_INITIAL_PENALTY"] = "100.0"
+            ENV["BENDERS_PENALIZED_FEASIBILITY_PENALTY_MULTIPLIER"] = "5.0"
+            ENV["BENDERS_PENALIZED_FEASIBILITY_MAXIMUM_PENALTY"] = "1e6"
+            ENV["BENDERS_PENALIZED_FEASIBILITY_STALL_ITERATIONS"] = "2"
+            ENV["BENDERS_PENALIZED_FEASIBILITY_SLACK_TOLERANCE"] = "1e-7"
+            settings = MacroEnergySolvers._penalized_feasibility_settings()
+            @test settings.enabled
+            @test settings.initial_penalty == 100.0
+            @test settings.penalty_multiplier == 5.0
+            @test settings.maximum_penalty == 1e6
+            @test settings.stall_iterations == 2
+            @test settings.slack_tolerance == 1e-7
+
+            ENV["BENDERS_PENALIZED_FEASIBILITY_PENALTY_MULTIPLIER"] = "1.0"
+            @test_throws ErrorException (
+                MacroEnergySolvers._penalized_feasibility_settings()
+            )
+        finally
+            for (name, value) in original_values
+                isnothing(value) ? delete!(ENV, name) : (ENV[name] = value)
+            end
+        end
+
+        model = Model()
+        @variable(model, x >= 0.0)
+        @objective(model, Min, 5.0 * x)
+        @constraint(model, x >= 1.0)
+        MacroEnergySolvers.add_slacks_to_subproblem!(model)
+        subproblems = [Dict{Any,Any}(:model => model)]
+        MacroEnergySolvers.set_penalized_feasibility_penalty!(
+            subproblems,
+            100.0,
+            10.0,
+        )
+        @test coefficient(objective_function(model), model[:slack_max]) == 10.0
+
+        planning_sol = (planning_cost=7.0, values=Dict{String,Float64}())
+        elastic_solution = Dict(
+            1 => (
+                op_cost=11.0,
+                operational_cost=1.0,
+                lambda=Float64[],
+                theta_coeff=1,
+                cut_source=:penalized_feasibility_optimality,
+                slack_value=1.0,
+                hard_feasible=false,
+            ),
+        )
+        @test isinf(MacroEnergySolvers.compute_upper_bound(
+            Model(),
+            planning_sol,
+            elastic_solution,
+        ))
+        hard_solution = Dict(
+            1 => merge(elastic_solution[1], (
+                op_cost=1.0,
+                slack_value=0.0,
+                hard_feasible=true,
+            )),
+        )
+        @test MacroEnergySolvers.compute_upper_bound(
+            Model(),
+            planning_sol,
+            hard_solution,
+        ) == 8.0
+    end
     @testset "Code quality (Aqua.jl)" begin
         Aqua.test_all(MacroEnergySolvers)
     end

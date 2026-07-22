@@ -165,6 +165,70 @@ function _add_multisector_biomass_master_strengthening!(planning_problem::Model)
 	return constraints
 end
 
+function _positive_env_float(name::String, default::Float64)
+	raw_value = get(ENV, name, string(default))
+	value = tryparse(Float64, raw_value)
+	isnothing(value) && error("$name must be numeric; got $(repr(raw_value))")
+	isfinite(value) && value > 0.0 || error(
+		"$name must be finite and positive; got $value",
+	)
+	return value
+end
+
+function _positive_env_int(name::String, default::Int)
+	raw_value = get(ENV, name, string(default))
+	value = tryparse(Int, raw_value)
+	isnothing(value) && error("$name must be an integer; got $(repr(raw_value))")
+	value > 0 || error("$name must be positive; got $value")
+	return value
+end
+
+function _penalized_feasibility_settings()
+	# Implements the elastic feasibility phase described for SCIP's Benders
+	# framework: solve recourse with c'y + M*s, retain the resulting ordinary
+	# optimality cuts, and increase M when feasibility progress stalls.  Because
+	# Q_M(x) <= Q(x) for nonnegative slack, every cut remains a valid lower bound
+	# on the original hard-recourse function as M increases.
+	enabled = _checkpoint_env_flag(
+		"BENDERS_PENALIZED_FEASIBILITY_PHASE",
+		false,
+	)
+	initial_penalty = _positive_env_float(
+		"BENDERS_PENALIZED_FEASIBILITY_INITIAL_PENALTY",
+		1.0e4,
+	)
+	penalty_multiplier = _positive_env_float(
+		"BENDERS_PENALIZED_FEASIBILITY_PENALTY_MULTIPLIER",
+		10.0,
+	)
+	penalty_multiplier > 1.0 || error(
+		"BENDERS_PENALIZED_FEASIBILITY_PENALTY_MULTIPLIER must exceed 1",
+	)
+	maximum_penalty = _positive_env_float(
+		"BENDERS_PENALIZED_FEASIBILITY_MAXIMUM_PENALTY",
+		1.0e12,
+	)
+	maximum_penalty >= initial_penalty || error(
+		"BENDERS_PENALIZED_FEASIBILITY_MAXIMUM_PENALTY must be at least the initial penalty",
+	)
+	stall_iterations = _positive_env_int(
+		"BENDERS_PENALIZED_FEASIBILITY_STALL_ITERATIONS",
+		3,
+	)
+	slack_tolerance = _positive_env_float(
+		"BENDERS_PENALIZED_FEASIBILITY_SLACK_TOLERANCE",
+		1.0e-6,
+	)
+	return (
+		enabled=enabled,
+		initial_penalty=initial_penalty,
+		penalty_multiplier=penalty_multiplier,
+		maximum_penalty=maximum_penalty,
+		stall_iterations=stall_iterations,
+		slack_tolerance=slack_tolerance,
+	)
+end
+
 """
 	benders(planning_problem::Model, 
 		subproblems::Union{Vector{Dict{Any, Any}}, DistributedArrays.DArray}, 
@@ -224,6 +288,19 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 	expect_feasible_subproblems = setup[:ExpectFeasibleSubproblems];
 	elastic_slack = get(setup, :ElasticSlack, false);
 	elastic_slack && @info("ElasticSlack=true: subproblem slack variables always unfixed; subproblems always feasible (optimality cuts only).")
+	penalized_feasibility_settings = _penalized_feasibility_settings()
+	penalized_feasibility_active = penalized_feasibility_settings.enabled
+	if penalized_feasibility_active
+		expect_feasible_subproblems && error(
+			"BENDERS_PENALIZED_FEASIBILITY_PHASE requires ExpectFeasibleSubproblems=false",
+		)
+		elastic_slack && error(
+			"BENDERS_PENALIZED_FEASIBILITY_PHASE is a replacement for ElasticSlack; set ElasticSlack=false",
+		)
+		_phase1_structured_slack_enabled() && error(
+			"BENDERS_PENALIZED_FEASIBILITY_PHASE currently requires BENDERS_PHASE1_STRUCTURED_SLACK=false",
+		)
+	end
 
 	if expect_feasible_subproblems == true
 		@info("Feasibility cuts will not be computed because ExpectFeasibleSubproblems is set to true.")
@@ -240,6 +317,16 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 		@info("Applying objective scaling by 1/$(obj_scale). LB/UB reported values will be unscaled.")
 		set_objective_function(planning_problem, objective_function(planning_problem) / obj_scale)
 		scale_subproblem_objectives!(subproblems, obj_scale)
+	end
+	penalized_feasibility_penalty =
+		penalized_feasibility_settings.initial_penalty
+	if penalized_feasibility_active
+		set_penalized_feasibility_penalty!(
+			subproblems,
+			penalized_feasibility_penalty,
+			obj_scale,
+		)
+		@info "PENALIZED_FEASIBILITY_PHASE_ENABLED: initial_penalty=$(penalized_feasibility_penalty) multiplier=$(penalized_feasibility_settings.penalty_multiplier) maximum_penalty=$(penalized_feasibility_settings.maximum_penalty) stall_iterations=$(penalized_feasibility_settings.stall_iterations) slack_tolerance=$(penalized_feasibility_settings.slack_tolerance)"
 	end
 
 	# Enforce non-negativity only on linking-variable families whose names imply
@@ -304,6 +391,9 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 	# before the first master solve so the reconstructed lower bound can be
 	# compared with the last atomically saved master state.
 	checkpoint_config = _feasibility_cut_checkpoint_config()
+	penalized_feasibility_active && checkpoint_config.replay && error(
+		"Standalone penalized feasibility cannot replay saved cuts",
+	)
 	replayed_feasibility_cuts = NamedTuple[]
 	checkpoint_state = nothing
 	if checkpoint_config.replay
@@ -395,6 +485,15 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 	levelset_proximal && @info("Incumbent-anchored level-set projection enabled by BENDERS_LEVELSET_PROXIMAL.")
 	feasibility_proximal && @info("Feasibility-phase proximal projection enabled by BENDERS_FEASIBILITY_PROXIMAL.")
 	optimality_cut_audit && @info("Optimality-cut master-movement audit enabled by BENDERS_OPTIMALITY_CUT_AUDIT.")
+	if penalized_feasibility_active
+		oracle_seed_enabled && error(
+			"Standalone penalized feasibility cannot use BENDERS_ORACLE_SEED",
+		)
+		if budget_uniform_override
+			budget_uniform_override = false
+			@info "PENALIZED_FEASIBILITY_STANDALONE: disabled Budget uniform override; candidates will be generated only by the master and self-anchored stabilization"
+		end
+	end
 
 	# Pre-compute Budget linking variable groups and their constraint RHS.
 	# Budget vars (names matching *_Budget_*[w]) are subject to sum==RHS equality constraints
@@ -677,6 +776,8 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 	end
 	feasibility_proximal_anchor = deepcopy(planning_sol)
 	feasibility_proximal_best_violation = Inf
+	penalized_feasibility_best_slack = Inf
+	penalized_feasibility_last_progress_iteration = -1
 
 	for k = 0:MaxIter
 
@@ -684,10 +785,87 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 
 		planning_sol_hist = hcat(planning_sol_hist, [planning_sol.values[s] for s in planning_variables])
 
-        subop_sol = solve_subproblems(subproblems,planning_sol,expect_feasible_subproblems,elastic_slack);
+		use_elastic_subproblems = elastic_slack || penalized_feasibility_active
+		subop_sol = solve_subproblems(
+			subproblems,
+			planning_sol,
+			expect_feasible_subproblems,
+			use_elastic_subproblems,
+			penalized_feasibility_active,
+			penalized_feasibility_settings.slack_tolerance,
+		);
 
 		cpu_subop_sol = time()-start_subop_sol;
 		@info("Solving the subproblems required $(tidy_timing(cpu_subop_sol)) seconds")
+		if penalized_feasibility_active
+			slack_values = [sol.slack_value for sol in values(subop_sol)]
+			n_infeasible = count(
+				>(penalized_feasibility_settings.slack_tolerance),
+				slack_values,
+			)
+			total_slack = sum(slack_values)
+			max_slack = maximum(slack_values)
+			@info "PENALIZED_FEASIBILITY_ITERATION_SUMMARY: k=$(k) infeasible=$(n_infeasible)/$(length(subop_sol)) penalty=$(penalized_feasibility_penalty) min_slack=$(minimum(slack_values)) max_slack=$(max_slack) sum_slack=$(total_slack)"
+
+			if n_infeasible == 0
+				@info "PENALIZED_FEASIBILITY_HARD_VALIDATION_STARTED: k=$(k) candidate_max_slack=$(max_slack)"
+				hard_subop_sol = solve_subproblems(
+					subproblems,
+					planning_sol,
+					false,
+					false,
+					false,
+					penalized_feasibility_settings.slack_tolerance,
+				)
+				hard_infeasible = count(
+					sol -> sol.theta_coeff == 0,
+					values(hard_subop_sol),
+				)
+				if hard_infeasible == 0
+					subop_sol = hard_subop_sol
+					penalized_feasibility_active = false
+					@info "PENALIZED_FEASIBILITY_PHASE_COMPLETE: k=$(k) penalty=$(penalized_feasibility_penalty) hard_feasible=$(length(hard_subop_sol))/$(length(hard_subop_sol)); switching permanently to ordinary Benders optimality solves"
+				else
+					@warn "PENALIZED_FEASIBILITY_HARD_VALIDATION_REJECTED: k=$(k) infeasible=$(hard_infeasible)/$(length(hard_subop_sol)); retaining elastic cuts and continuing the feasibility phase"
+				end
+			end
+
+			if penalized_feasibility_active
+				improvement_tolerance = max(
+					penalized_feasibility_settings.slack_tolerance,
+					1e-3 * max(1.0, penalized_feasibility_best_slack),
+				)
+				if !isfinite(penalized_feasibility_best_slack) ||
+						total_slack < penalized_feasibility_best_slack - improvement_tolerance
+					penalized_feasibility_best_slack = total_slack
+					penalized_feasibility_last_progress_iteration = k
+					feasibility_proximal_best_violation = total_slack
+					feasibility_proximal_anchor = deepcopy(planning_sol)
+					@info "PENALIZED_FEASIBILITY_INCUMBENT_UPDATED: k=$(k) sum_slack=$(total_slack)"
+				elseif k - penalized_feasibility_last_progress_iteration >=
+						penalized_feasibility_settings.stall_iterations
+					new_penalty = min(
+						penalized_feasibility_penalty *
+							penalized_feasibility_settings.penalty_multiplier,
+						penalized_feasibility_settings.maximum_penalty,
+					)
+					if new_penalty > penalized_feasibility_penalty
+						old_penalty = penalized_feasibility_penalty
+						penalized_feasibility_penalty = new_penalty
+						set_penalized_feasibility_penalty!(
+							subproblems,
+							penalized_feasibility_penalty,
+							obj_scale,
+						)
+						penalized_feasibility_last_progress_iteration = k
+						@info "PENALIZED_FEASIBILITY_PENALTY_INCREASED: k=$(k) old_penalty=$(old_penalty) new_penalty=$(new_penalty) best_sum_slack=$(penalized_feasibility_best_slack)"
+					else
+						@warn "PENALIZED_FEASIBILITY_MAXIMUM_PENALTY_STALLED: k=$(k) penalty=$(penalized_feasibility_penalty) best_sum_slack=$(penalized_feasibility_best_slack)"
+						penalized_feasibility_last_progress_iteration = k
+					end
+				end
+			end
+		end
 		phase1_objectives = [
 			sol.op_cost for sol in values(subop_sol) if sol.theta_coeff == 0
 		]
@@ -862,7 +1040,11 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 		append!(gap_hist, running_gap)
 
 		info_string = "k = $k      LB = $(round_from_tol(obj_scale * LB, ConvTol, 2))     UB = $(round_from_tol(obj_scale * UB, ConvTol, 2))       Gap = $(round_from_tol(running_gap, ConvTol, 2))       CPU Time = $(tidy_timing(cpu_time[end]))"
-		if any(subop_sol[w].theta_coeff==0 for w in keys(subop_sol))
+		if any(
+			subop_sol[w].theta_coeff == 0 ||
+				(hasproperty(subop_sol[w], :hard_feasible) && !subop_sol[w].hard_feasible)
+			for w in keys(subop_sol)
+		)
 			@info("*** $info_string")
 		else
 			@info("$info_string")
@@ -1098,6 +1280,15 @@ end
 
 function compute_upper_bound(m::Model,planning_sol::NamedTuple,subop_sol::Dict)
 	any(subop_sol[w].theta_coeff==0 for w in keys(subop_sol)) && return Inf;
+	any(
+		hasproperty(subop_sol[w], :hard_feasible) &&
+			!subop_sol[w].hard_feasible for w in keys(subop_sol)
+	) && return Inf
 
-	return  planning_sol.planning_cost + sum(subop_sol[w].op_cost for w in keys(subop_sol))
+	operational_cost = sum(
+		hasproperty(subop_sol[w], :operational_cost) ?
+			subop_sol[w].operational_cost : subop_sol[w].op_cost
+		for w in keys(subop_sol)
+	)
+	return planning_sol.planning_cost + operational_cost
 end
