@@ -1072,10 +1072,22 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 				end
 			end
 		elseif (cpu_time[end] >= MaxCpuTime)
+			penalized_feasibility_active && @warn(
+				"PENALIZED_FEASIBILITY_PHASE_INCOMPLETE: CPU limit reached " *
+				"before a hard-feasible candidate was found; " *
+				"best_sum_slack=$(penalized_feasibility_best_slack) " *
+				"penalty=$(penalized_feasibility_penalty)",
+			)
 			@info("*** Terminating because CPU time limit reached (MaxCpuTime=$MaxCpuTime)  ***")
 			term_status = "TIMELIMIT"
 			break
 		elseif k == MaxIter
+			penalized_feasibility_active && @warn(
+				"PENALIZED_FEASIBILITY_PHASE_INCOMPLETE: MaxIter reached " *
+				"before a hard-feasible candidate was found; " *
+				"best_sum_slack=$(penalized_feasibility_best_slack) " *
+				"penalty=$(penalized_feasibility_penalty)",
+			)
 			@info("*** Terminating because maximum number of iterations reached (MaxIter=$MaxIter)  ***")
 			term_status = "MAXITER"
 			break
