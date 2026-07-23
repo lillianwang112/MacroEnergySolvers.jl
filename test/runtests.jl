@@ -502,6 +502,7 @@ using JuMP
             "BENDERS_PENALIZED_FEASIBILITY_MAXIMUM_PENALTY",
             "BENDERS_PENALIZED_FEASIBILITY_STALL_ITERATIONS",
             "BENDERS_PENALIZED_FEASIBILITY_SLACK_TOLERANCE",
+            "BENDERS_PENALIZED_FEASIBILITY_MASTER_LEVEL_RELAXATION",
         )
         original_values = Dict(
             name => get(ENV, name, nothing) for name in environment_names
@@ -513,6 +514,7 @@ using JuMP
             ENV["BENDERS_PENALIZED_FEASIBILITY_MAXIMUM_PENALTY"] = "1e6"
             ENV["BENDERS_PENALIZED_FEASIBILITY_STALL_ITERATIONS"] = "2"
             ENV["BENDERS_PENALIZED_FEASIBILITY_SLACK_TOLERANCE"] = "1e-7"
+            ENV["BENDERS_PENALIZED_FEASIBILITY_MASTER_LEVEL_RELAXATION"] = "0.1"
             settings = MacroEnergySolvers._penalized_feasibility_settings()
             @test settings.enabled
             @test settings.initial_penalty == 100.0
@@ -520,6 +522,7 @@ using JuMP
             @test settings.maximum_penalty == 1e6
             @test settings.stall_iterations == 2
             @test settings.slack_tolerance == 1e-7
+            @test settings.master_level_relaxation == 0.1
 
             ENV["BENDERS_PENALIZED_FEASIBILITY_PENALTY_MULTIPLIER"] = "1.0"
             @test_throws ErrorException (
@@ -543,6 +546,56 @@ using JuMP
             10.0,
         )
         @test coefficient(objective_function(model), model[:slack_max]) == 10.0
+
+        structured_key = "BENDERS_PHASE1_STRUCTURED_SLACK"
+        structured_weight_key = "BENDERS_PHASE1_STRUCTURED_SLACK_WEIGHT"
+        original_structured = get(ENV, structured_key, nothing)
+        original_structured_weight = get(ENV, structured_weight_key, nothing)
+        try
+            ENV[structured_key] = "true"
+            ENV[structured_weight_key] = "2.0"
+            structured_model = Model()
+            @variable(structured_model, structured_x)
+            @objective(structured_model, Min, 5.0 * structured_x)
+            @constraint(structured_model, structured_x <= 1.0)
+            @constraint(structured_model, structured_x >= -1.0)
+            @constraint(structured_model, structured_x == 0.0)
+            MacroEnergySolvers.add_slacks_to_subproblem!(structured_model)
+            structured_subproblems = [Dict{Any,Any}(:model => structured_model)]
+            MacroEnergySolvers.set_penalized_feasibility_penalty!(
+                structured_subproblems,
+                100.0,
+                10.0,
+            )
+            structured_objective = objective_function(structured_model)
+            @test coefficient(
+                structured_objective,
+                structured_model[:slack_max],
+            ) == 10.0
+            @test coefficient(
+                structured_objective,
+                only(structured_model[:phase1_slack_less]),
+            ) ≈ 20.0 / 3.0
+            @test coefficient(
+                structured_objective,
+                only(structured_model[:phase1_slack_greater]),
+            ) ≈ 20.0 / 3.0
+            @test coefficient(
+                structured_objective,
+                only(structured_model[:phase1_slack_eq_abs]),
+            ) ≈ 20.0 / 3.0
+            @test coefficient(
+                structured_objective,
+                only(structured_model[:slack_eq]),
+            ) == 0.0
+        finally
+            isnothing(original_structured) ?
+                delete!(ENV, structured_key) :
+                (ENV[structured_key] = original_structured)
+            isnothing(original_structured_weight) ?
+                delete!(ENV, structured_weight_key) :
+                (ENV[structured_weight_key] = original_structured_weight)
+        end
 
         planning_sol = (planning_cost=7.0, values=Dict{String,Float64}())
         elastic_solution = Dict(

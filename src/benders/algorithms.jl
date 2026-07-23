@@ -219,6 +219,10 @@ function _penalized_feasibility_settings()
 		"BENDERS_PENALIZED_FEASIBILITY_SLACK_TOLERANCE",
 		1.0e-6,
 	)
+	master_level_relaxation = _positive_env_float(
+		"BENDERS_PENALIZED_FEASIBILITY_MASTER_LEVEL_RELAXATION",
+		0.05,
+	)
 	return (
 		enabled=enabled,
 		initial_penalty=initial_penalty,
@@ -226,6 +230,7 @@ function _penalized_feasibility_settings()
 		maximum_penalty=maximum_penalty,
 		stall_iterations=stall_iterations,
 		slack_tolerance=slack_tolerance,
+		master_level_relaxation=master_level_relaxation,
 	)
 end
 
@@ -297,9 +302,6 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 		elastic_slack && error(
 			"BENDERS_PENALIZED_FEASIBILITY_PHASE is a replacement for ElasticSlack; set ElasticSlack=false",
 		)
-		_phase1_structured_slack_enabled() && error(
-			"BENDERS_PENALIZED_FEASIBILITY_PHASE currently requires BENDERS_PHASE1_STRUCTURED_SLACK=false",
-		)
 	end
 
 	if expect_feasible_subproblems == true
@@ -307,6 +309,7 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 	else
 		add_slacks_to_subproblems!(subproblems);
 	end
+	@info "BENDERS_PLANNING_MODEL_SIZE: variables=$(num_variables(planning_problem)) constraints=$(num_constraints(planning_problem; count_variable_in_set_constraints=true))"
 
 	# Scale objectives once before any solve to improve numerical condition number.
 	# With obj~1e10 and unit-scale constraints, duals are corrupted. Scaling by 1/1e6
@@ -326,7 +329,7 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 			penalized_feasibility_penalty,
 			obj_scale,
 		)
-		@info "PENALIZED_FEASIBILITY_PHASE_ENABLED: initial_penalty=$(penalized_feasibility_penalty) multiplier=$(penalized_feasibility_settings.penalty_multiplier) maximum_penalty=$(penalized_feasibility_settings.maximum_penalty) stall_iterations=$(penalized_feasibility_settings.stall_iterations) slack_tolerance=$(penalized_feasibility_settings.slack_tolerance)"
+		@info "PENALIZED_FEASIBILITY_PHASE_ENABLED: initial_penalty=$(penalized_feasibility_penalty) multiplier=$(penalized_feasibility_settings.penalty_multiplier) maximum_penalty=$(penalized_feasibility_settings.maximum_penalty) stall_iterations=$(penalized_feasibility_settings.stall_iterations) slack_tolerance=$(penalized_feasibility_settings.slack_tolerance) structured_phase1=$(_phase1_structured_slack_enabled()) master_level_relaxation=$(penalized_feasibility_settings.master_level_relaxation)"
 	end
 
 	# Enforce non-negativity only on linking-variable families whose names imply
@@ -799,13 +802,14 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 		@info("Solving the subproblems required $(tidy_timing(cpu_subop_sol)) seconds")
 		if penalized_feasibility_active
 			slack_values = [sol.slack_value for sol in values(subop_sol)]
+			max_slack_values = [sol.max_slack_value for sol in values(subop_sol)]
 			n_infeasible = count(
 				>(penalized_feasibility_settings.slack_tolerance),
-				slack_values,
+				max_slack_values,
 			)
 			total_slack = sum(slack_values)
-			max_slack = maximum(slack_values)
-			@info "PENALIZED_FEASIBILITY_ITERATION_SUMMARY: k=$(k) infeasible=$(n_infeasible)/$(length(subop_sol)) penalty=$(penalized_feasibility_penalty) min_slack=$(minimum(slack_values)) max_slack=$(max_slack) sum_slack=$(total_slack)"
+			max_slack = maximum(max_slack_values)
+			@info "PENALIZED_FEASIBILITY_ITERATION_SUMMARY: k=$(k) infeasible=$(n_infeasible)/$(length(subop_sol)) penalty=$(penalized_feasibility_penalty) min_phase1=$(minimum(slack_values)) max_phase1=$(maximum(slack_values)) sum_phase1=$(total_slack) max_row_slack=$(max_slack)"
 
 			if n_infeasible == 0
 				@info "PENALIZED_FEASIBILITY_HARD_VALIDATION_STARTED: k=$(k) candidate_max_slack=$(max_slack)"
@@ -1093,11 +1097,17 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 			break
 		elseif UB==Inf
 			if feasibility_proximal
+				master_objective_level = penalized_feasibility_active ?
+					LBnew + penalized_feasibility_settings.master_level_relaxation *
+						max(1.0, abs(LBnew)) : nothing
 				planning_sol = solve_feasibility_proximal_problem(
 					planning_problem,
 					planning_variables,
 					unst_planning_sol,
 					feasibility_proximal_anchor,
+					;
+					master_objective_level=master_objective_level,
+					include_raw_in_scale=!penalized_feasibility_active,
 				)
 				if checkpoint_config.write && checkpoint_exact_feasibility_phase
 					center_path = _write_feasibility_proximal_center(

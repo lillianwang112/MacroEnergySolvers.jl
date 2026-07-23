@@ -21,6 +21,8 @@ function add_slacks_to_local_subproblems!(subproblem_local::Vector{Dict{Any,Any}
 
     for sp in subproblem_local
         add_slacks_to_subproblem!(sp[:model]);
+        model = sp[:model]
+        @info "BENDERS_SUBPROBLEM_MODEL_SIZE: w=$(sp[:subproblem_index]) variables=$(num_variables(model)) constraints=$(num_constraints(model; count_variable_in_set_constraints=true)) structured_phase1=$(_phase1_structured_slack_enabled())"
     end
     return nothing
 end
@@ -338,7 +340,28 @@ function set_local_penalized_feasibility_penalty!(
         haskey(object_dictionary(model), :slack_max) || error(
             "Penalized feasibility requires slack_max in every subproblem",
         )
-        set_objective_coefficient(model, model[:slack_max], scaled_penalty)
+        haskey(object_dictionary(model), :phase1_feasibility_objective) || error(
+            "Penalized feasibility requires a Phase-I objective in every subproblem",
+        )
+
+        # Remove the previous elastic penalty without touching the original
+        # operational objective, then apply M times the complete Phase-I
+        # measure.  In structured mode this includes every row slack rather
+        # than only the L-infinity epigraph variable slack_max.
+        for variable in all_variables(model)
+            _is_phase1_slack_variable(variable) || continue
+            set_objective_coefficient(model, variable, 0.0)
+        end
+        phase1_objective = model[:phase1_feasibility_objective]
+        for variable in all_variables(model)
+            phase1_coefficient = coefficient(phase1_objective, variable)
+            iszero(phase1_coefficient) && continue
+            set_objective_coefficient(
+                model,
+                variable,
+                scaled_penalty * phase1_coefficient,
+            )
+        end
     end
     return nothing
 end
@@ -593,6 +616,7 @@ function solve_subproblem(
     end
 
 	slack_value = 0.0
+	max_slack_value = 0.0
 	operational_cost = Inf
 	hard_feasible = false
 	optimize!(m)
@@ -609,17 +633,18 @@ function solve_subproblem(
         hard_feasible = true
         lmax = isempty(lambda) ? 0.0 : maximum(abs.(lambda))
         if elastic_slack
-            slack_value = value(m[:slack_max])
+            max_slack_value = value(m[:slack_max])
+            slack_value = value(m[:phase1_feasibility_objective])
             penalty_coefficient = coefficient(
                 objective_function(m),
                 m[:slack_max],
             )
             operational_cost = op_cost - penalty_coefficient * slack_value
-            hard_feasible = slack_value <= slack_tolerance
-            if slack_value > slack_tolerance
-                @info "Subproblem elastic (slack=$(round(slack_value, sigdigits=4))): penalized_cost=$(round(op_cost, sigdigits=4)), operational_cost=$(round(operational_cost, sigdigits=4)), penalty=$(round(penalty_coefficient, sigdigits=4)), lambda_norm=$(round(norm(lambda), sigdigits=4)), lambda_max=$(round(lmax, sigdigits=4))"
+            hard_feasible = max_slack_value <= slack_tolerance
+            if !hard_feasible
+                @info "Subproblem elastic (phase1=$(round(slack_value, sigdigits=4)), max_slack=$(round(max_slack_value, sigdigits=4))): penalized_cost=$(round(op_cost, sigdigits=4)), operational_cost=$(round(operational_cost, sigdigits=4)), penalty=$(round(penalty_coefficient, sigdigits=4)), lambda_norm=$(round(norm(lambda), sigdigits=4)), lambda_max=$(round(lmax, sigdigits=4))"
             else
-                @info "Subproblem feasible (slack=$(round(slack_value, sigdigits=4))): op_cost=$(round(operational_cost, sigdigits=4)), lambda_norm=$(round(norm(lambda), sigdigits=4)), lambda_max=$(round(lmax, sigdigits=4))"
+                @info "Subproblem feasible (phase1=$(round(slack_value, sigdigits=4)), max_slack=$(round(max_slack_value, sigdigits=4))): op_cost=$(round(operational_cost, sigdigits=4)), lambda_norm=$(round(norm(lambda), sigdigits=4)), lambda_max=$(round(lmax, sigdigits=4))"
             end
             fix(m[:slack_max], 0.0; force=true)  # re-fix for next iteration
         end
@@ -866,6 +891,7 @@ function solve_subproblem(
                 theta_coeff = 0
                 cut_source = :phase1
                 slack_value = op_cost
+                max_slack_value = value(m[:slack_max])
                 operational_cost = Inf
                 hard_feasible = false
                 lambda_max = isempty(lambda) ? 0.0 : maximum(abs.(lambda))
@@ -888,6 +914,7 @@ function solve_subproblem(
         theta_coeff=theta_coeff,
         cut_source=cut_source,
         slack_value=slack_value,
+        max_slack_value=max_slack_value,
         operational_cost=operational_cost,
         hard_feasible=hard_feasible,
     )

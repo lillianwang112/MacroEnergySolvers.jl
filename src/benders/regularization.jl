@@ -55,8 +55,12 @@ function solve_feasibility_proximal_problem(
 	planning_variables::Vector{String},
 	raw_planning_sol::NamedTuple,
 	center_sol::NamedTuple,
+	;
+	master_objective_level::Union{Nothing,Float64}=nothing,
+	include_raw_in_scale::Bool=true,
 )
 	original_objective = objective_function(m)
+	level_constraint = nothing
 	proximal_variables = String[]
 	proximal_scales = Dict{String,Float64}()
 
@@ -72,10 +76,11 @@ function solve_feasibility_proximal_problem(
 			"FEASIBILITY_PROXIMAL: planning model is missing $variable_name",
 		)
 		push!(proximal_variables, variable_name)
-		proximal_scales[variable_name] = _level_set_proximal_scale(
-			center_sol.values[variable_name],
-			raw_planning_sol.values[variable_name],
-		)
+		proximal_scales[variable_name] = include_raw_in_scale ?
+			_level_set_proximal_scale(
+				center_sol.values[variable_name],
+				raw_planning_sol.values[variable_name],
+			) : max(1.0, abs(Float64(center_sol.values[variable_name])))
 	end
 	isempty(proximal_variables) && error(
 		"FEASIBILITY_PROXIMAL: no non-vTHETA planning variables were found",
@@ -83,6 +88,12 @@ function solve_feasibility_proximal_problem(
 
 	projected_sol = nothing
 	try
+		if !isnothing(master_objective_level)
+			level_constraint = @constraint(
+				m,
+				original_objective <= master_objective_level,
+			)
+		end
 		@objective(
 			m,
 			Min,
@@ -116,9 +127,11 @@ function solve_feasibility_proximal_problem(
 			abs(projected_sol.values[variable_name] - raw_planning_sol.values[variable_name])
 			for variable_name in proximal_variables
 		)
-		@info "FEASIBILITY_PROXIMAL_SOLVED: variables=$(length(proximal_variables)) normalized_squared_distance=$(normalized_squared_distance) max_abs_center_difference=$(max_abs_center_difference) max_abs_raw_difference=$(max_abs_raw_difference) planning_cost=$(planning_cost)"
+		projected_master_objective = value(original_objective)
+		@info "FEASIBILITY_PROXIMAL_SOLVED: variables=$(length(proximal_variables)) normalized_squared_distance=$(normalized_squared_distance) max_abs_center_difference=$(max_abs_center_difference) max_abs_raw_difference=$(max_abs_raw_difference) planning_cost=$(planning_cost) master_objective=$(projected_master_objective) master_objective_level=$(master_objective_level) include_raw_in_scale=$(include_raw_in_scale)"
 	finally
 		@objective(m, Min, original_objective)
+		!isnothing(level_constraint) && delete(m, level_constraint)
 	end
 
 	return projected_sol
