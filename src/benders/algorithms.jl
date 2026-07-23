@@ -375,6 +375,7 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 		"level_fraction=$(lexicographic_phase1_settings.level_fraction) " *
 		"structured_phase1=$(_phase1_structured_slack_enabled())",
 	)
+	lexicographic_phase1_enabled && (flush(stdout); flush(stderr))
 
 	# Enforce non-negativity only on linking-variable families whose names imply
 	# a nonnegative physical quantity. Net-policy Budget variables remain signed,
@@ -1444,9 +1445,14 @@ function run_lexicographic_phase1_bootstrap!(
 			if elapsed >= max_cpu_time
 				stop_reason = "CPU limit reached"
 				@warn "LEXICOGRAPHIC_PHASE1_INCOMPLETE: CPU limit reached before hard feasibility; k=$(k) sum_phase1=$(last_sum_phase1) max_row_slack=$(last_max_row_slack)"
+				flush(stdout)
+				flush(stderr)
 				break
 			end
 
+			@info "LEXICOGRAPHIC_PHASE1_SWEEP_STARTED: k=$(k) elapsed=$(tidy_timing(elapsed)) center_sum_phase1=$(best_sum_phase1)"
+			flush(stdout)
+			flush(stderr)
 			start_subproblems = time()
 			phase1_subop_sol = solve_subproblems(
 				subproblems,
@@ -1474,6 +1480,8 @@ function run_lexicographic_phase1_bootstrap!(
 				phase1_center = deepcopy(planning_sol)
 			end
 			@info "LEXICOGRAPHIC_PHASE1_ITERATION_SUMMARY: k=$(k) infeasible=$(n_infeasible)/$(length(W)) min_phase1=$(minimum(phase1_values)) max_phase1=$(maximum(phase1_values)) sum_phase1=$(last_sum_phase1) best_sum_phase1=$(best_sum_phase1) serious_step=$(serious_step) max_row_slack=$(last_max_row_slack) subproblem_seconds=$(tidy_timing(phase1_timespan))"
+			flush(stdout)
+			flush(stderr)
 
 			if n_infeasible == 0
 				restore_lexicographic_phase1_objective!(subproblems)
@@ -1527,6 +1535,8 @@ function run_lexicographic_phase1_bootstrap!(
 			)
 			planning_values = collect(values(planning_sol.values))
 			@info "LEXICOGRAPHIC_PHASE1_LEVEL_MASTER_SOLVED: k=$(k) lower_bound=$(phase1_lower_bound) incumbent=$(best_sum_phase1) level=$(phase1_level) level_fraction=$(settings.level_fraction) raw_theta_values=$(raw_phase1_theta_values) planning_cost=$(planning_sol.planning_cost) planning_max=$(maximum(planning_values)) planning_min=$(minimum(planning_values))"
+			flush(stdout)
+			flush(stderr)
 		end
 	finally
 		phase1_objectives_active &&

@@ -129,6 +129,8 @@ function solve_feasibility_proximal_problem(
 		)
 		projected_master_objective = value(original_objective)
 		@info "FEASIBILITY_PROXIMAL_SOLVED: variables=$(length(proximal_variables)) normalized_squared_distance=$(normalized_squared_distance) max_abs_center_difference=$(max_abs_center_difference) max_abs_raw_difference=$(max_abs_raw_difference) planning_cost=$(planning_cost) master_objective=$(projected_master_objective) master_objective_level=$(master_objective_level) include_raw_in_scale=$(include_raw_in_scale)"
+		flush(stdout)
+		flush(stderr)
 	finally
 		@objective(m, Min, original_objective)
 		!isnothing(level_constraint) && delete(m, level_constraint)

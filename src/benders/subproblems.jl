@@ -1046,6 +1046,10 @@ function solve_local_subproblems(
             );
         end
         @info "Subproblem w=$(w): status=$(termination_status(m)) time=$(round(t_sp, digits=2))s theta_coeff=$(local_sol[w].theta_coeff)"
+        if lexicographic_phase1
+            flush(stdout)
+            flush(stderr)
+        end
     end
     return local_sol
 end
