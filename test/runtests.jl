@@ -632,6 +632,7 @@ using JuMP
             "BENDERS_LEXICOGRAPHIC_PHASE1",
             "BENDERS_LEXICOGRAPHIC_PHASE1_MAX_ITERATIONS",
             "BENDERS_LEXICOGRAPHIC_PHASE1_SLACK_TOLERANCE",
+            "BENDERS_LEXICOGRAPHIC_PHASE1_LEVEL_FRACTION",
         )
         original_values = Dict(
             name => get(ENV, name, nothing) for name in environment_names
@@ -640,10 +641,14 @@ using JuMP
             ENV["BENDERS_LEXICOGRAPHIC_PHASE1"] = "true"
             ENV["BENDERS_LEXICOGRAPHIC_PHASE1_MAX_ITERATIONS"] = "7"
             ENV["BENDERS_LEXICOGRAPHIC_PHASE1_SLACK_TOLERANCE"] = "1e-8"
+            ENV["BENDERS_LEXICOGRAPHIC_PHASE1_LEVEL_FRACTION"] = "0.4"
             settings = MacroEnergySolvers._lexicographic_phase1_settings()
             @test settings.enabled
             @test settings.max_iterations == 7
             @test settings.slack_tolerance == 1e-8
+            @test settings.level_fraction == 0.4
+            ENV["BENDERS_LEXICOGRAPHIC_PHASE1_LEVEL_FRACTION"] = "1.0"
+            @test_throws ErrorException MacroEnergySolvers._lexicographic_phase1_settings()
         finally
             for (name, value) in original_values
                 isnothing(value) ? delete!(ENV, name) : (ENV[name] = value)
@@ -693,6 +698,32 @@ using JuMP
         @test normalized_coefficient(cut, vPHASE1[1]) == 1.0
         @test normalized_coefficient(cut, master_x) == -4.0
         @test normalized_rhs(cut) == -5.0
+
+        @test MacroEnergySolvers._lexicographic_phase1_level(
+            0.0,
+            100.0,
+            0.5,
+        ) == 50.0
+        @test MacroEnergySolvers._lexicographic_phase1_level(
+            100.0 + 1e-10,
+            100.0,
+            0.5,
+        ) == 100.0
+        @test_throws ErrorException MacroEnergySolvers._lexicographic_phase1_level(
+            101.0,
+            100.0,
+            0.5,
+        )
+        @test MacroEnergySolvers._lexicographic_phase1_serious_step(
+            99.0,
+            100.0,
+            1e-6,
+        )
+        @test !MacroEnergySolvers._lexicographic_phase1_serious_step(
+            100.0,
+            100.0,
+            1e-6,
+        )
     end
     @testset "Code quality (Aqua.jl)" begin
         Aqua.test_all(MacroEnergySolvers)

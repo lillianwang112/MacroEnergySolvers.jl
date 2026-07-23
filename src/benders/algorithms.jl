@@ -235,6 +235,13 @@ function _penalized_feasibility_settings()
 end
 
 function _lexicographic_phase1_settings()
+	level_fraction = _positive_env_float(
+		"BENDERS_LEXICOGRAPHIC_PHASE1_LEVEL_FRACTION",
+		0.5,
+	)
+	level_fraction < 1.0 || error(
+		"BENDERS_LEXICOGRAPHIC_PHASE1_LEVEL_FRACTION must be less than 1",
+	)
 	return (
 		enabled=_checkpoint_env_flag(
 			"BENDERS_LEXICOGRAPHIC_PHASE1",
@@ -248,6 +255,7 @@ function _lexicographic_phase1_settings()
 			"BENDERS_LEXICOGRAPHIC_PHASE1_SLACK_TOLERANCE",
 			1.0e-6,
 		),
+		level_fraction=level_fraction,
 	)
 end
 
@@ -364,6 +372,7 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 	lexicographic_phase1_enabled && @info(
 		"LEXICOGRAPHIC_PHASE1_ENABLED: max_iterations=$(lexicographic_phase1_settings.max_iterations) " *
 		"slack_tolerance=$(lexicographic_phase1_settings.slack_tolerance) " *
+		"level_fraction=$(lexicographic_phase1_settings.level_fraction) " *
 		"structured_phase1=$(_phase1_structured_slack_enabled())",
 	)
 
@@ -1356,6 +1365,46 @@ function update_lexicographic_phase1_cuts!(
 end
 
 
+function _lexicographic_phase1_level(
+	lower_bound::Real,
+	incumbent_value::Real,
+	level_fraction::Real,
+)
+	isfinite(lower_bound) || error(
+		"Lexicographic Phase-I lower bound must be finite; got $lower_bound",
+	)
+	isfinite(incumbent_value) || error(
+		"Lexicographic Phase-I incumbent must be finite; got $incumbent_value",
+	)
+	0.0 < level_fraction < 1.0 || error(
+		"Lexicographic Phase-I level fraction must lie strictly between zero and one",
+	)
+	lower_bound <= incumbent_value + 1.0e-8 * max(1.0, abs(incumbent_value)) ||
+		error(
+			"Lexicographic Phase-I cut lower bound $lower_bound exceeds " *
+			"evaluated incumbent $incumbent_value",
+		)
+	effective_lower_bound = min(lower_bound, incumbent_value)
+	return effective_lower_bound +
+		level_fraction * (incumbent_value - effective_lower_bound)
+end
+
+
+function _lexicographic_phase1_serious_step(
+	candidate_value::Real,
+	incumbent_value::Real,
+	slack_tolerance::Real,
+)
+	isfinite(candidate_value) || return false
+	isfinite(incumbent_value) || return true
+	improvement_tolerance = max(
+		Float64(slack_tolerance),
+		1.0e-6 * max(1.0, abs(Float64(incumbent_value))),
+	)
+	return candidate_value < incumbent_value - improvement_tolerance
+end
+
+
 function run_lexicographic_phase1_bootstrap!(
 	planning_problem::Model,
 	subproblems::Union{Vector{Dict{Any,Any}},DistributedArrays.DArray},
@@ -1380,6 +1429,10 @@ function run_lexicographic_phase1_bootstrap!(
 	completion_iteration = -1
 	last_sum_phase1 = Inf
 	last_max_row_slack = Inf
+	best_sum_phase1 = Inf
+	phase1_center = deepcopy(planning_sol)
+	evaluated_iterations = 0
+	stop_reason = "maximum iterations reached"
 	phase1_master_cuts = ConstraintRef[]
 
 	try
@@ -1389,6 +1442,7 @@ function run_lexicographic_phase1_bootstrap!(
 		for k in 0:(settings.max_iterations - 1)
 			elapsed = time() - solver_start_time
 			if elapsed >= max_cpu_time
+				stop_reason = "CPU limit reached"
 				@warn "LEXICOGRAPHIC_PHASE1_INCOMPLETE: CPU limit reached before hard feasibility; k=$(k) sum_phase1=$(last_sum_phase1) max_row_slack=$(last_max_row_slack)"
 				break
 			end
@@ -1408,8 +1462,18 @@ function run_lexicographic_phase1_bootstrap!(
 			max_slack_values = [sol.max_slack_value for sol in values(phase1_subop_sol)]
 			last_sum_phase1 = sum(phase1_values)
 			last_max_row_slack = maximum(max_slack_values)
+			evaluated_iterations += 1
 			n_infeasible = count(>(settings.slack_tolerance), max_slack_values)
-			@info "LEXICOGRAPHIC_PHASE1_ITERATION_SUMMARY: k=$(k) infeasible=$(n_infeasible)/$(length(W)) min_phase1=$(minimum(phase1_values)) max_phase1=$(maximum(phase1_values)) sum_phase1=$(last_sum_phase1) max_row_slack=$(last_max_row_slack) subproblem_seconds=$(tidy_timing(phase1_timespan))"
+			serious_step = _lexicographic_phase1_serious_step(
+				last_sum_phase1,
+				best_sum_phase1,
+				settings.slack_tolerance,
+			)
+			if serious_step
+				best_sum_phase1 = last_sum_phase1
+				phase1_center = deepcopy(planning_sol)
+			end
+			@info "LEXICOGRAPHIC_PHASE1_ITERATION_SUMMARY: k=$(k) infeasible=$(n_infeasible)/$(length(W)) min_phase1=$(minimum(phase1_values)) max_phase1=$(maximum(phase1_values)) sum_phase1=$(last_sum_phase1) best_sum_phase1=$(best_sum_phase1) serious_step=$(serious_step) max_row_slack=$(last_max_row_slack) subproblem_seconds=$(tidy_timing(phase1_timespan))"
 
 			if n_infeasible == 0
 				restore_lexicographic_phase1_objective!(subproblems)
@@ -1443,13 +1507,26 @@ function run_lexicographic_phase1_bootstrap!(
 				linking_variables_sub,
 				k,
 			))
-			planning_sol, phase1_lower_bound = solve_planning_problem(
+			raw_planning_sol, phase1_lower_bound = solve_planning_problem(
 				planning_problem,
 				planning_variables,
 			)
-			phase1_theta_values = [value(vPHASE1[w]) for w in W]
+			raw_phase1_theta_values = [value(vPHASE1[w]) for w in W]
+			phase1_level = _lexicographic_phase1_level(
+				phase1_lower_bound,
+				best_sum_phase1,
+				settings.level_fraction,
+			)
+			planning_sol = solve_feasibility_proximal_problem(
+				planning_problem,
+				planning_variables,
+				raw_planning_sol,
+				phase1_center,
+				master_objective_level=phase1_level,
+				include_raw_in_scale=true,
+			)
 			planning_values = collect(values(planning_sol.values))
-			@info "LEXICOGRAPHIC_PHASE1_MASTER_SOLVED: k=$(k) lower_bound=$(phase1_lower_bound) theta_values=$(phase1_theta_values) planning_cost=$(planning_sol.planning_cost) planning_max=$(maximum(planning_values)) planning_min=$(minimum(planning_values))"
+			@info "LEXICOGRAPHIC_PHASE1_LEVEL_MASTER_SOLVED: k=$(k) lower_bound=$(phase1_lower_bound) incumbent=$(best_sum_phase1) level=$(phase1_level) level_fraction=$(settings.level_fraction) raw_theta_values=$(raw_phase1_theta_values) planning_cost=$(planning_sol.planning_cost) planning_max=$(maximum(planning_values)) planning_min=$(minimum(planning_values))"
 		end
 	finally
 		phase1_objectives_active &&
@@ -1461,9 +1538,10 @@ function run_lexicographic_phase1_bootstrap!(
 	end
 
 	phase1_complete && hard_validated || error(
-		"LEXICOGRAPHIC_PHASE1_INCOMPLETE: no hard-feasible candidate after " *
-		"$(settings.max_iterations) iterations; " *
+		"LEXICOGRAPHIC_PHASE1_INCOMPLETE: no hard-feasible candidate; " *
+		"reason=$(stop_reason); evaluated_iterations=$(evaluated_iterations); " *
 		"last_sum_phase1=$(last_sum_phase1) " *
+		"best_sum_phase1=$(best_sum_phase1) " *
 		"last_max_row_slack=$(last_max_row_slack)",
 	)
 	@info "LEXICOGRAPHIC_PHASE1_COMPLETE: k=$(completion_iteration) sum_phase1=$(last_sum_phase1) max_row_slack=$(last_max_row_slack); restored original objectives and switching to ordinary Benders"
