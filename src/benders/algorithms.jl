@@ -156,7 +156,9 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 		budget_group_rhs[key] = (vars, rhs)
 	end
 	n_budget_groups = length(budget_group_rhs)
-	n_budget_vars   = sum((length(v) for (v,_) in values(budget_group_rhs)); init=0)
+	# Julia 1.11 cannot use `sum(...; init=0)` for this empty generator. Cases
+	# without Budget linking variables should simply report zero variables.
+	n_budget_vars = isempty(budget_group_rhs) ? 0 : sum(length(v) for (v, _) in values(budget_group_rhs))
 	if n_budget_groups > 0
 		@info("Budget uniform override: detected $n_budget_vars Budget linking vars across $n_budget_groups groups. Will distribute uniformly to planning_sol while UB==Inf to prevent LP vertex concentration.")
 		# Apply uniform override to the initial planning_sol so the very first
