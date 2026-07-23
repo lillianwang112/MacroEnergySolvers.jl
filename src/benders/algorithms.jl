@@ -234,6 +234,23 @@ function _penalized_feasibility_settings()
 	)
 end
 
+function _lexicographic_phase1_settings()
+	return (
+		enabled=_checkpoint_env_flag(
+			"BENDERS_LEXICOGRAPHIC_PHASE1",
+			false,
+		),
+		max_iterations=_positive_env_int(
+			"BENDERS_LEXICOGRAPHIC_PHASE1_MAX_ITERATIONS",
+			20,
+		),
+		slack_tolerance=_positive_env_float(
+			"BENDERS_LEXICOGRAPHIC_PHASE1_SLACK_TOLERANCE",
+			1.0e-6,
+		),
+	)
+end
+
 """
 	benders(planning_problem::Model, 
 		subproblems::Union{Vector{Dict{Any, Any}}, DistributedArrays.DArray}, 
@@ -295,12 +312,25 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 	elastic_slack && @info("ElasticSlack=true: subproblem slack variables always unfixed; subproblems always feasible (optimality cuts only).")
 	penalized_feasibility_settings = _penalized_feasibility_settings()
 	penalized_feasibility_active = penalized_feasibility_settings.enabled
+	lexicographic_phase1_settings = _lexicographic_phase1_settings()
+	lexicographic_phase1_enabled = lexicographic_phase1_settings.enabled
+	penalized_feasibility_active && lexicographic_phase1_enabled && error(
+		"BENDERS_PENALIZED_FEASIBILITY_PHASE and BENDERS_LEXICOGRAPHIC_PHASE1 are mutually exclusive",
+	)
 	if penalized_feasibility_active
 		expect_feasible_subproblems && error(
 			"BENDERS_PENALIZED_FEASIBILITY_PHASE requires ExpectFeasibleSubproblems=false",
 		)
 		elastic_slack && error(
 			"BENDERS_PENALIZED_FEASIBILITY_PHASE is a replacement for ElasticSlack; set ElasticSlack=false",
+		)
+	end
+	if lexicographic_phase1_enabled
+		expect_feasible_subproblems && error(
+			"BENDERS_LEXICOGRAPHIC_PHASE1 requires ExpectFeasibleSubproblems=false",
+		)
+		elastic_slack && error(
+			"BENDERS_LEXICOGRAPHIC_PHASE1 replaces ElasticSlack; set ElasticSlack=false",
 		)
 	end
 
@@ -331,6 +361,11 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 		)
 		@info "PENALIZED_FEASIBILITY_PHASE_ENABLED: initial_penalty=$(penalized_feasibility_penalty) multiplier=$(penalized_feasibility_settings.penalty_multiplier) maximum_penalty=$(penalized_feasibility_settings.maximum_penalty) stall_iterations=$(penalized_feasibility_settings.stall_iterations) slack_tolerance=$(penalized_feasibility_settings.slack_tolerance) structured_phase1=$(_phase1_structured_slack_enabled()) master_level_relaxation=$(penalized_feasibility_settings.master_level_relaxation)"
 	end
+	lexicographic_phase1_enabled && @info(
+		"LEXICOGRAPHIC_PHASE1_ENABLED: max_iterations=$(lexicographic_phase1_settings.max_iterations) " *
+		"slack_tolerance=$(lexicographic_phase1_settings.slack_tolerance) " *
+		"structured_phase1=$(_phase1_structured_slack_enabled())",
+	)
 
 	# Enforce non-negativity only on linking-variable families whose names imply
 	# a nonnegative physical quantity. Net-policy Budget variables remain signed,
@@ -396,6 +431,9 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 	checkpoint_config = _feasibility_cut_checkpoint_config()
 	penalized_feasibility_active && checkpoint_config.replay && error(
 		"Standalone penalized feasibility cannot replay saved cuts",
+	)
+	lexicographic_phase1_enabled && checkpoint_config.replay && error(
+		"Lexicographic Phase I cannot replay ordinary feasibility cuts",
 	)
 	replayed_feasibility_cuts = NamedTuple[]
 	checkpoint_state = nothing
@@ -495,6 +533,18 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 		if budget_uniform_override
 			budget_uniform_override = false
 			@info "PENALIZED_FEASIBILITY_STANDALONE: disabled Budget uniform override; candidates will be generated only by the master and self-anchored stabilization"
+		end
+	end
+	if lexicographic_phase1_enabled
+		oracle_seed_enabled && error(
+			"Lexicographic Phase I cannot use BENDERS_ORACLE_SEED",
+		)
+		feasibility_proximal && error(
+			"Lexicographic Phase I owns the pre-UB master search; set BENDERS_FEASIBILITY_PROXIMAL=false",
+		)
+		if budget_uniform_override
+			budget_uniform_override = false
+			@info "LEXICOGRAPHIC_PHASE1_STANDALONE: disabled Budget uniform override"
 		end
 	end
 
@@ -776,6 +826,20 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 		UB = oracle_ub
 		planning_sol_hist = [planning_sol.values[s] for s in planning_variables]
 		@info "ORACLE_SEED_OPERATIONAL_VALID: subproblems=$(length(oracle_subop_sol)) planning_cost=$(oracle_planning_sol.planning_cost) operational_cost=$(sum(sol.op_cost for sol in values(oracle_subop_sol))) initial_UB=$(UB)"
+	end
+	if lexicographic_phase1_enabled
+		planning_sol = run_lexicographic_phase1_bootstrap!(
+			planning_problem,
+			subproblems,
+			linking_variables_sub,
+			planning_sol,
+			planning_variables,
+			lexicographic_phase1_settings,
+			solver_start_time,
+			MaxCpuTime,
+		)
+		planning_sol_best = deepcopy(planning_sol)
+		planning_sol_hist = [planning_sol.values[s] for s in planning_variables]
 	end
 	feasibility_proximal_anchor = deepcopy(planning_sol)
 	feasibility_proximal_best_violation = Inf
@@ -1268,6 +1332,144 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 	return (planning_problem=planning_problem,planning_sol = planning_sol_best, subop_sol = subop_sol_best,LB_hist = LB_hist,UB_hist = UB_hist,gap_hist = gap_hist, termination_status = term_status, cpu_time = cpu_time, planning_sol_hist = planning_sol_hist)
 	
 end
+
+function update_lexicographic_phase1_cuts!(
+	m::Model,
+	subop_sol::Dict,
+	planning_sol::NamedTuple,
+	linking_variables_sub::Dict,
+	k::Int,
+)
+	W = collect(keys(subop_sol))
+	constraints = @constraint(
+		m,
+		[w in W],
+		m[:vPHASE1][w] >= subop_sol[w].op_cost + sum(
+			subop_sol[w].lambda[i] * (
+				variable_by_name(m, linking_variables_sub[w][i]) -
+				planning_sol.values[linking_variables_sub[w][i]]
+			) for i in eachindex(linking_variables_sub[w])
+		),
+		base_name="LexicographicPhase1Cut_$(k)",
+	)
+    return [constraints[w] for w in W]
+end
+
+
+function run_lexicographic_phase1_bootstrap!(
+	planning_problem::Model,
+	subproblems::Union{Vector{Dict{Any,Any}},DistributedArrays.DArray},
+	linking_variables_sub::Dict,
+	planning_sol::NamedTuple,
+	planning_variables::Vector{String},
+	settings::NamedTuple,
+	solver_start_time::Float64,
+	max_cpu_time::Real,
+)
+	haskey(object_dictionary(planning_problem), :vPHASE1) && error(
+		"Planning model already contains vPHASE1",
+	)
+	W = sort!(collect(keys(linking_variables_sub)))
+	original_planning_objective = objective_function(planning_problem)
+	@variable(planning_problem, vPHASE1[w in W] >= 0.0)
+	@objective(planning_problem, Min, sum(vPHASE1[w] for w in W))
+
+	phase1_objectives_active = false
+	phase1_complete = false
+	hard_validated = false
+	completion_iteration = -1
+	last_sum_phase1 = Inf
+	last_max_row_slack = Inf
+	phase1_master_cuts = ConstraintRef[]
+
+	try
+		set_lexicographic_phase1_objective!(subproblems)
+		phase1_objectives_active = true
+
+		for k in 0:(settings.max_iterations - 1)
+			elapsed = time() - solver_start_time
+			if elapsed >= max_cpu_time
+				@warn "LEXICOGRAPHIC_PHASE1_INCOMPLETE: CPU limit reached before hard feasibility; k=$(k) sum_phase1=$(last_sum_phase1) max_row_slack=$(last_max_row_slack)"
+				break
+			end
+
+			start_subproblems = time()
+			phase1_subop_sol = solve_subproblems(
+				subproblems,
+				planning_sol,
+				false,
+				true,
+				false,
+				settings.slack_tolerance,
+				true,
+			)
+			phase1_timespan = time() - start_subproblems
+			phase1_values = [sol.slack_value for sol in values(phase1_subop_sol)]
+			max_slack_values = [sol.max_slack_value for sol in values(phase1_subop_sol)]
+			last_sum_phase1 = sum(phase1_values)
+			last_max_row_slack = maximum(max_slack_values)
+			n_infeasible = count(>(settings.slack_tolerance), max_slack_values)
+			@info "LEXICOGRAPHIC_PHASE1_ITERATION_SUMMARY: k=$(k) infeasible=$(n_infeasible)/$(length(W)) min_phase1=$(minimum(phase1_values)) max_phase1=$(maximum(phase1_values)) sum_phase1=$(last_sum_phase1) max_row_slack=$(last_max_row_slack) subproblem_seconds=$(tidy_timing(phase1_timespan))"
+
+			if n_infeasible == 0
+				restore_lexicographic_phase1_objective!(subproblems)
+				phase1_objectives_active = false
+				@info "LEXICOGRAPHIC_PHASE1_HARD_VALIDATION_STARTED: k=$(k)"
+				hard_subop_sol = solve_subproblems(
+					subproblems,
+					planning_sol,
+					false,
+					false,
+				)
+				hard_infeasible = count(
+					sol -> sol.theta_coeff == 0,
+					values(hard_subop_sol),
+				)
+				if hard_infeasible == 0
+					phase1_complete = true
+					hard_validated = true
+					completion_iteration = k
+					break
+				end
+				@warn "LEXICOGRAPHIC_PHASE1_HARD_VALIDATION_REJECTED: k=$(k) infeasible=$(hard_infeasible)/$(length(W)); continuing Phase I"
+				set_lexicographic_phase1_objective!(subproblems)
+				phase1_objectives_active = true
+			end
+
+			append!(phase1_master_cuts, update_lexicographic_phase1_cuts!(
+				planning_problem,
+				phase1_subop_sol,
+				planning_sol,
+				linking_variables_sub,
+				k,
+			))
+			planning_sol, phase1_lower_bound = solve_planning_problem(
+				planning_problem,
+				planning_variables,
+			)
+			phase1_theta_values = [value(vPHASE1[w]) for w in W]
+			planning_values = collect(values(planning_sol.values))
+			@info "LEXICOGRAPHIC_PHASE1_MASTER_SOLVED: k=$(k) lower_bound=$(phase1_lower_bound) theta_values=$(phase1_theta_values) planning_cost=$(planning_sol.planning_cost) planning_max=$(maximum(planning_values)) planning_min=$(minimum(planning_values))"
+		end
+	finally
+		phase1_objectives_active &&
+			restore_lexicographic_phase1_objective!(subproblems)
+		set_objective_function(planning_problem, original_planning_objective)
+		delete.(planning_problem, phase1_master_cuts)
+		delete.(planning_problem, [vPHASE1[w] for w in W])
+		unregister(planning_problem, :vPHASE1)
+	end
+
+	phase1_complete && hard_validated || error(
+		"LEXICOGRAPHIC_PHASE1_INCOMPLETE: no hard-feasible candidate after " *
+		"$(settings.max_iterations) iterations; " *
+		"last_sum_phase1=$(last_sum_phase1) " *
+		"last_max_row_slack=$(last_max_row_slack)",
+	)
+	@info "LEXICOGRAPHIC_PHASE1_COMPLETE: k=$(completion_iteration) sum_phase1=$(last_sum_phase1) max_row_slack=$(last_max_row_slack); restored original objectives and switching to ordinary Benders"
+	return planning_sol
+end
+
 
 function update_planning_problem_multi_cuts!(m::Model,subop_sol::Dict,planning_sol::NamedTuple,linking_variables_sub::Dict,k::Int64)
 

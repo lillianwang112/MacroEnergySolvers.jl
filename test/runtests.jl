@@ -627,6 +627,73 @@ using JuMP
             hard_solution,
         ) == 8.0
     end
+    @testset "Lexicographic Phase-I bootstrap components" begin
+        environment_names = (
+            "BENDERS_LEXICOGRAPHIC_PHASE1",
+            "BENDERS_LEXICOGRAPHIC_PHASE1_MAX_ITERATIONS",
+            "BENDERS_LEXICOGRAPHIC_PHASE1_SLACK_TOLERANCE",
+        )
+        original_values = Dict(
+            name => get(ENV, name, nothing) for name in environment_names
+        )
+        try
+            ENV["BENDERS_LEXICOGRAPHIC_PHASE1"] = "true"
+            ENV["BENDERS_LEXICOGRAPHIC_PHASE1_MAX_ITERATIONS"] = "7"
+            ENV["BENDERS_LEXICOGRAPHIC_PHASE1_SLACK_TOLERANCE"] = "1e-8"
+            settings = MacroEnergySolvers._lexicographic_phase1_settings()
+            @test settings.enabled
+            @test settings.max_iterations == 7
+            @test settings.slack_tolerance == 1e-8
+        finally
+            for (name, value) in original_values
+                isnothing(value) ? delete!(ENV, name) : (ENV[name] = value)
+            end
+        end
+
+        subproblem = Model()
+        @variable(subproblem, x)
+        @objective(subproblem, Min, 5.0 * x)
+        @constraint(subproblem, x >= 1.0)
+        MacroEnergySolvers.add_slacks_to_subproblem!(subproblem)
+        original_objective = objective_function(subproblem)
+        subproblems = [Dict{Any,Any}(:model => subproblem)]
+        MacroEnergySolvers.set_lexicographic_phase1_objective!(subproblems)
+        @test coefficient(objective_function(subproblem), x) == 0.0
+        @test coefficient(
+            objective_function(subproblem),
+            subproblem[:slack_max],
+        ) == 1.0
+        MacroEnergySolvers.restore_lexicographic_phase1_objective!(subproblems)
+        @test isequal_canonical(objective_function(subproblem), original_objective)
+        @test !haskey(
+            object_dictionary(subproblem),
+            :lexicographic_original_objective,
+        )
+
+        master = Model()
+        @variable(master, master_x, base_name="master_x")
+        @variable(master, vPHASE1[w in 1:1] >= 0.0)
+        planning_sol = (
+            planning_cost=0.0,
+            values=Dict("master_x" => 2.0),
+        )
+        phase1_solution = Dict(1 => (
+            op_cost=3.0,
+            lambda=[4.0],
+        ))
+        MacroEnergySolvers.update_lexicographic_phase1_cuts!(
+            master,
+            phase1_solution,
+            planning_sol,
+            Dict(1 => ["master_x"]),
+            7,
+        )
+        cut = constraint_by_name(master, "LexicographicPhase1Cut_7[1]")
+        @test !isnothing(cut)
+        @test normalized_coefficient(cut, vPHASE1[1]) == 1.0
+        @test normalized_coefficient(cut, master_x) == -4.0
+        @test normalized_rhs(cut) == -5.0
+    end
     @testset "Code quality (Aqua.jl)" begin
         Aqua.test_all(MacroEnergySolvers)
     end

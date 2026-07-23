@@ -366,6 +366,99 @@ function set_local_penalized_feasibility_penalty!(
     return nothing
 end
 
+function set_local_lexicographic_phase1_objective!(
+    subproblem_local::Vector{Dict{Any,Any}},
+)
+    for sp in subproblem_local
+        model = sp[:model]
+        haskey(object_dictionary(model), :phase1_feasibility_objective) || error(
+            "Lexicographic Phase I requires a Phase-I objective in every subproblem",
+        )
+        haskey(object_dictionary(model), :lexicographic_original_objective) && error(
+            "Lexicographic Phase-I objective is already active",
+        )
+        model[:lexicographic_original_objective] = objective_function(model)
+        original_solver_attributes = (
+            method=optimizer_attribute_or_missing(model, "Method"),
+            crossover=optimizer_attribute_or_missing(model, "Crossover"),
+        )
+        model[:lexicographic_original_solver_attributes] =
+            original_solver_attributes
+        # The Phase-I cuts depend directly on the returned dual multipliers.
+        # Dual simplex produced the validated certificates in the multisector
+        # audit, so do not inherit a barrier setting during this bootstrap.
+        !ismissing(original_solver_attributes.method) &&
+            set_attribute(model, "Method", 1)
+        !ismissing(original_solver_attributes.crossover) &&
+            set_attribute(model, "Crossover", 0)
+        set_objective_function(model, model[:phase1_feasibility_objective])
+    end
+    return nothing
+end
+
+function restore_local_lexicographic_phase1_objective!(
+    subproblem_local::Vector{Dict{Any,Any}},
+)
+    for sp in subproblem_local
+        model = sp[:model]
+        haskey(object_dictionary(model), :lexicographic_original_objective) || error(
+            "Lexicographic Phase-I objective is not active",
+        )
+        set_objective_function(model, model[:lexicographic_original_objective])
+        original_solver_attributes =
+            model[:lexicographic_original_solver_attributes]
+        !ismissing(original_solver_attributes.method) &&
+            set_attribute(model, "Method", original_solver_attributes.method)
+        !ismissing(original_solver_attributes.crossover) &&
+            set_attribute(
+                model,
+                "Crossover",
+                original_solver_attributes.crossover,
+            )
+        unregister(model, :lexicographic_original_objective)
+        unregister(model, :lexicographic_original_solver_attributes)
+    end
+    return nothing
+end
+
+
+function set_lexicographic_phase1_objective!(
+    subproblems::Vector{Dict{Any,Any}},
+)
+    return set_local_lexicographic_phase1_objective!(subproblems)
+end
+
+
+function set_lexicographic_phase1_objective!(
+    subproblems::DArray{Dict{Any,Any},1,Vector{Dict{Any,Any}}},
+)
+    @sync for p in workers()
+        @async @spawnat p set_local_lexicographic_phase1_objective!(
+            localpart(subproblems),
+        )
+    end
+    return nothing
+end
+
+
+function restore_lexicographic_phase1_objective!(
+    subproblems::Vector{Dict{Any,Any}},
+)
+    return restore_local_lexicographic_phase1_objective!(subproblems)
+end
+
+
+function restore_lexicographic_phase1_objective!(
+    subproblems::DArray{Dict{Any,Any},1,Vector{Dict{Any,Any}}},
+)
+    @sync for p in workers()
+        @async @spawnat p restore_local_lexicographic_phase1_objective!(
+            localpart(subproblems),
+        )
+    end
+    return nothing
+end
+
 function set_penalized_feasibility_penalty!(
     m_subproblems::Vector{Dict{Any, Any}},
     penalty::Float64,
@@ -600,6 +693,7 @@ function solve_subproblem(
     subproblem_index=nothing,
     penalized_feasibility::Bool=false,
     slack_tolerance::Float64=1e-6,
+    lexicographic_phase1::Bool=false,
 )
 
     ### Solve the operational subproblem. If it is infeasible, compute feasibility cuts.
@@ -625,7 +719,8 @@ function solve_subproblem(
 		op_cost = objective_value(m);
 		lambda = [dual(FixRef(variable_by_name(m,y))) for y in linking_variables_sub];
 		theta_coeff = 1;
-        cut_source = penalized_feasibility ?
+        cut_source = lexicographic_phase1 ?
+            :lexicographic_phase1_optimality : penalized_feasibility ?
             :penalized_feasibility_optimality :
             (elastic_slack ? :elastic_optimality : :optimality)
         slack_value = 0.0
@@ -635,14 +730,14 @@ function solve_subproblem(
         if elastic_slack
             max_slack_value = value(m[:slack_max])
             slack_value = value(m[:phase1_feasibility_objective])
-            penalty_coefficient = coefficient(
-                objective_function(m),
-                m[:slack_max],
+            penalty_coefficient = lexicographic_phase1 ? 0.0 : coefficient(
+                objective_function(m), m[:slack_max]
             )
-            operational_cost = op_cost - penalty_coefficient * slack_value
+            operational_cost = lexicographic_phase1 ? Inf :
+                op_cost - penalty_coefficient * slack_value
             hard_feasible = max_slack_value <= slack_tolerance
             if !hard_feasible
-                @info "Subproblem elastic (phase1=$(round(slack_value, sigdigits=4)), max_slack=$(round(max_slack_value, sigdigits=4))): penalized_cost=$(round(op_cost, sigdigits=4)), operational_cost=$(round(operational_cost, sigdigits=4)), penalty=$(round(penalty_coefficient, sigdigits=4)), lambda_norm=$(round(norm(lambda), sigdigits=4)), lambda_max=$(round(lmax, sigdigits=4))"
+                @info "Subproblem elastic (phase1=$(round(slack_value, sigdigits=4)), max_slack=$(round(max_slack_value, sigdigits=4))): objective=$(round(op_cost, sigdigits=4)), operational_cost=$(round(operational_cost, sigdigits=4)), penalty=$(round(penalty_coefficient, sigdigits=4)), lexicographic_phase1=$(lexicographic_phase1), lambda_norm=$(round(norm(lambda), sigdigits=4)), lambda_max=$(round(lmax, sigdigits=4))"
             else
                 @info "Subproblem feasible (phase1=$(round(slack_value, sigdigits=4)), max_slack=$(round(max_slack_value, sigdigits=4))): op_cost=$(round(operational_cost, sigdigits=4)), lambda_norm=$(round(norm(lambda), sigdigits=4)), lambda_max=$(round(lmax, sigdigits=4))"
             end
@@ -929,6 +1024,7 @@ function solve_local_subproblems(
     elastic_slack::Bool=false,
     penalized_feasibility::Bool=false,
     slack_tolerance::Float64=1e-6,
+    lexicographic_phase1::Bool=false,
 )
 
     local_sol=Dict();
@@ -946,6 +1042,7 @@ function solve_local_subproblems(
                 w,
                 penalized_feasibility,
                 slack_tolerance,
+                lexicographic_phase1,
             );
         end
         @info "Subproblem w=$(w): status=$(termination_status(m)) time=$(round(t_sp, digits=2))s theta_coeff=$(local_sol[w].theta_coeff)"
@@ -988,6 +1085,7 @@ function solve_subproblems(
     elastic_slack::Bool=false,
     penalized_feasibility::Bool=false,
     slack_tolerance::Float64=1e-6,
+    lexicographic_phase1::Bool=false,
 )
 
     p_id = workers();
@@ -996,7 +1094,7 @@ function solve_subproblems(
     sub_results = [Dict() for _ in 1:np_id];
 
     @sync for k in 1:np_id
-              @async sub_results[k]= @fetchfrom p_id[k] solve_local_subproblems(localpart(m_subproblems),planning_sol,expect_feasible_subproblems,elastic_slack,penalized_feasibility,slack_tolerance); ### This is equivalent to fetch(@spawnat p .....)
+              @async sub_results[k]= @fetchfrom p_id[k] solve_local_subproblems(localpart(m_subproblems),planning_sol,expect_feasible_subproblems,elastic_slack,penalized_feasibility,slack_tolerance,lexicographic_phase1); ### This is equivalent to fetch(@spawnat p .....)
     end
 
 	sub_results = merge(sub_results...);
@@ -1012,6 +1110,7 @@ function solve_subproblems(
     elastic_slack::Bool=false,
     penalized_feasibility::Bool=false,
     slack_tolerance::Float64=1e-6,
+    lexicographic_phase1::Bool=false,
 )
 
     sub_results = solve_local_subproblems(
@@ -1021,6 +1120,7 @@ function solve_subproblems(
         elastic_slack,
         penalized_feasibility,
         slack_tolerance,
+        lexicographic_phase1,
     );
 
     return sub_results
