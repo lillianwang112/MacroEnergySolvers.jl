@@ -4,6 +4,7 @@ module MacroEnergySolvers
     using Distributed
     using DistributedArrays
     using Pkg
+    using Serialization
     using Dates, Logging
     using LinearAlgebra, Random
 
