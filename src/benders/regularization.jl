@@ -33,6 +33,56 @@ A NamedTuple containing the solution of the stabilized problem with the same str
 _level_set_proximal_scale(incumbent_value, raw_value) =
 	max(1.0, abs(Float64(incumbent_value)), abs(Float64(raw_value)))
 
+function _feasibility_proximal_metric(
+	m::Model,
+	planning_variables::Vector{String},
+	raw_planning_sol::NamedTuple,
+	center_sol::NamedTuple;
+	include_raw_in_scale::Bool=true,
+	fixed_proximal_scales::Union{Nothing,AbstractDict}=nothing,
+)
+	proximal_variables = String[]
+	proximal_scales = Dict{String,Float64}()
+
+	for variable_name in planning_variables
+		startswith(variable_name, "vTHETA") && continue
+		haskey(raw_planning_sol.values, variable_name) || error(
+			"FEASIBILITY_PROXIMAL: raw planning solution is missing $variable_name",
+		)
+		haskey(center_sol.values, variable_name) || error(
+			"FEASIBILITY_PROXIMAL: center solution is missing $variable_name",
+		)
+		isnothing(variable_by_name(m, variable_name)) && error(
+			"FEASIBILITY_PROXIMAL: planning model is missing $variable_name",
+		)
+		push!(proximal_variables, variable_name)
+		if isnothing(fixed_proximal_scales)
+			proximal_scales[variable_name] = include_raw_in_scale ?
+				_level_set_proximal_scale(
+					center_sol.values[variable_name],
+					raw_planning_sol.values[variable_name],
+				) : max(1.0, abs(Float64(center_sol.values[variable_name])))
+		else
+			haskey(fixed_proximal_scales, variable_name) || error(
+				"FEASIBILITY_PROXIMAL: fixed scale is missing $variable_name",
+			)
+			scale = Float64(fixed_proximal_scales[variable_name])
+			isfinite(scale) && scale > 0.0 || error(
+				"FEASIBILITY_PROXIMAL: fixed scale for $variable_name must be finite and positive",
+			)
+			proximal_scales[variable_name] = scale
+		end
+	end
+	isempty(proximal_variables) && error(
+		"FEASIBILITY_PROXIMAL: no non-vTHETA planning variables were found",
+	)
+
+	return (
+		variables=proximal_variables,
+		scales=proximal_scales,
+	)
+end
+
 """
     solve_feasibility_proximal_problem(
         m,
@@ -58,33 +108,20 @@ function solve_feasibility_proximal_problem(
 	;
 	master_objective_level::Union{Nothing,Float64}=nothing,
 	include_raw_in_scale::Bool=true,
+	fixed_proximal_scales::Union{Nothing,AbstractDict}=nothing,
 )
 	original_objective = objective_function(m)
 	level_constraint = nothing
-	proximal_variables = String[]
-	proximal_scales = Dict{String,Float64}()
-
-	for variable_name in planning_variables
-		startswith(variable_name, "vTHETA") && continue
-		haskey(raw_planning_sol.values, variable_name) || error(
-			"FEASIBILITY_PROXIMAL: raw planning solution is missing $variable_name",
-		)
-		haskey(center_sol.values, variable_name) || error(
-			"FEASIBILITY_PROXIMAL: center solution is missing $variable_name",
-		)
-		isnothing(variable_by_name(m, variable_name)) && error(
-			"FEASIBILITY_PROXIMAL: planning model is missing $variable_name",
-		)
-		push!(proximal_variables, variable_name)
-		proximal_scales[variable_name] = include_raw_in_scale ?
-			_level_set_proximal_scale(
-				center_sol.values[variable_name],
-				raw_planning_sol.values[variable_name],
-			) : max(1.0, abs(Float64(center_sol.values[variable_name])))
-	end
-	isempty(proximal_variables) && error(
-		"FEASIBILITY_PROXIMAL: no non-vTHETA planning variables were found",
+	proximal_metric = _feasibility_proximal_metric(
+		m,
+		planning_variables,
+		raw_planning_sol,
+		center_sol;
+		include_raw_in_scale=include_raw_in_scale,
+		fixed_proximal_scales=fixed_proximal_scales,
 	)
+	proximal_variables = proximal_metric.variables
+	proximal_scales = proximal_metric.scales
 
 	projected_sol = nothing
 	try
@@ -128,7 +165,7 @@ function solve_feasibility_proximal_problem(
 			for variable_name in proximal_variables
 		)
 		projected_master_objective = value(original_objective)
-		@info "FEASIBILITY_PROXIMAL_SOLVED: variables=$(length(proximal_variables)) normalized_squared_distance=$(normalized_squared_distance) max_abs_center_difference=$(max_abs_center_difference) max_abs_raw_difference=$(max_abs_raw_difference) planning_cost=$(planning_cost) master_objective=$(projected_master_objective) master_objective_level=$(master_objective_level) include_raw_in_scale=$(include_raw_in_scale)"
+		@info "FEASIBILITY_PROXIMAL_SOLVED: variables=$(length(proximal_variables)) normalized_squared_distance=$(normalized_squared_distance) max_abs_center_difference=$(max_abs_center_difference) max_abs_raw_difference=$(max_abs_raw_difference) planning_cost=$(planning_cost) master_objective=$(projected_master_objective) master_objective_level=$(master_objective_level) include_raw_in_scale=$(include_raw_in_scale) fixed_metric=$(!isnothing(fixed_proximal_scales))"
 		flush(stdout)
 		flush(stderr)
 	finally

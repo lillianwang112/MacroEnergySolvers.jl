@@ -242,6 +242,13 @@ function _lexicographic_phase1_settings()
 	level_fraction < 1.0 || error(
 		"BENDERS_LEXICOGRAPHIC_PHASE1_LEVEL_FRACTION must be less than 1",
 	)
+	null_step_contraction = _positive_env_float(
+		"BENDERS_LEXICOGRAPHIC_PHASE1_NULL_STEP_CONTRACTION",
+		0.5,
+	)
+	null_step_contraction < 1.0 || error(
+		"BENDERS_LEXICOGRAPHIC_PHASE1_NULL_STEP_CONTRACTION must be less than 1",
+	)
 	return (
 		enabled=_checkpoint_env_flag(
 			"BENDERS_LEXICOGRAPHIC_PHASE1",
@@ -256,6 +263,7 @@ function _lexicographic_phase1_settings()
 			1.0e-6,
 		),
 		level_fraction=level_fraction,
+		null_step_contraction=null_step_contraction,
 	)
 end
 
@@ -373,6 +381,7 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 		"LEXICOGRAPHIC_PHASE1_ENABLED: max_iterations=$(lexicographic_phase1_settings.max_iterations) " *
 		"slack_tolerance=$(lexicographic_phase1_settings.slack_tolerance) " *
 		"level_fraction=$(lexicographic_phase1_settings.level_fraction) " *
+		"null_step_contraction=$(lexicographic_phase1_settings.null_step_contraction) " *
 		"structured_phase1=$(_phase1_structured_slack_enabled())",
 	)
 	lexicographic_phase1_enabled && (flush(stdout); flush(stderr))
@@ -1406,6 +1415,26 @@ function _lexicographic_phase1_serious_step(
 end
 
 
+function _lexicographic_phase1_adaptive_level_fraction(
+	base_fraction::Real,
+	null_steps::Integer,
+	null_step_contraction::Real,
+)
+	0.0 < base_fraction < 1.0 || error(
+		"Lexicographic Phase-I base level fraction must lie strictly between zero and one",
+	)
+	null_steps >= 0 || error(
+		"Lexicographic Phase-I null-step count must be nonnegative",
+	)
+	0.0 < null_step_contraction < 1.0 || error(
+		"Lexicographic Phase-I null-step contraction must lie strictly between zero and one",
+	)
+	return 1.0 -
+		(1.0 - Float64(base_fraction)) *
+		Float64(null_step_contraction)^Int(null_steps)
+end
+
+
 function run_lexicographic_phase1_bootstrap!(
 	planning_problem::Model,
 	subproblems::Union{Vector{Dict{Any,Any}},DistributedArrays.DArray},
@@ -1432,6 +1461,8 @@ function run_lexicographic_phase1_bootstrap!(
 	last_max_row_slack = Inf
 	best_sum_phase1 = Inf
 	phase1_center = deepcopy(planning_sol)
+	phase1_proximal_scales = nothing
+	null_steps = 0
 	evaluated_iterations = 0
 	stop_reason = "maximum iterations reached"
 	phase1_master_cuts = ConstraintRef[]
@@ -1478,8 +1509,11 @@ function run_lexicographic_phase1_bootstrap!(
 			if serious_step
 				best_sum_phase1 = last_sum_phase1
 				phase1_center = deepcopy(planning_sol)
+				null_steps = 0
+			else
+				null_steps += 1
 			end
-			@info "LEXICOGRAPHIC_PHASE1_ITERATION_SUMMARY: k=$(k) infeasible=$(n_infeasible)/$(length(W)) min_phase1=$(minimum(phase1_values)) max_phase1=$(maximum(phase1_values)) sum_phase1=$(last_sum_phase1) best_sum_phase1=$(best_sum_phase1) serious_step=$(serious_step) max_row_slack=$(last_max_row_slack) subproblem_seconds=$(tidy_timing(phase1_timespan))"
+			@info "LEXICOGRAPHIC_PHASE1_ITERATION_SUMMARY: k=$(k) infeasible=$(n_infeasible)/$(length(W)) min_phase1=$(minimum(phase1_values)) max_phase1=$(maximum(phase1_values)) sum_phase1=$(last_sum_phase1) best_sum_phase1=$(best_sum_phase1) serious_step=$(serious_step) null_steps=$(null_steps) max_row_slack=$(last_max_row_slack) subproblem_seconds=$(tidy_timing(phase1_timespan))"
 			flush(stdout)
 			flush(stderr)
 
@@ -1520,10 +1554,29 @@ function run_lexicographic_phase1_bootstrap!(
 				planning_variables,
 			)
 			raw_phase1_theta_values = [value(vPHASE1[w]) for w in W]
+			if isnothing(phase1_proximal_scales)
+				phase1_proximal_scales = _feasibility_proximal_metric(
+					planning_problem,
+					planning_variables,
+					raw_planning_sol,
+					phase1_center;
+					include_raw_in_scale=true,
+				).scales
+				scale_values = collect(values(phase1_proximal_scales))
+				@info "LEXICOGRAPHIC_PHASE1_PROXIMAL_METRIC_FROZEN: variables=$(length(scale_values)) min_scale=$(minimum(scale_values)) max_scale=$(maximum(scale_values))"
+				flush(stdout)
+				flush(stderr)
+			end
+			adaptive_level_fraction =
+				_lexicographic_phase1_adaptive_level_fraction(
+					settings.level_fraction,
+					null_steps,
+					settings.null_step_contraction,
+				)
 			phase1_level = _lexicographic_phase1_level(
 				phase1_lower_bound,
 				best_sum_phase1,
-				settings.level_fraction,
+				adaptive_level_fraction,
 			)
 			planning_sol = solve_feasibility_proximal_problem(
 				planning_problem,
@@ -1531,10 +1584,10 @@ function run_lexicographic_phase1_bootstrap!(
 				raw_planning_sol,
 				phase1_center,
 				master_objective_level=phase1_level,
-				include_raw_in_scale=true,
+				fixed_proximal_scales=phase1_proximal_scales,
 			)
 			planning_values = collect(values(planning_sol.values))
-			@info "LEXICOGRAPHIC_PHASE1_LEVEL_MASTER_SOLVED: k=$(k) lower_bound=$(phase1_lower_bound) incumbent=$(best_sum_phase1) level=$(phase1_level) level_fraction=$(settings.level_fraction) raw_theta_values=$(raw_phase1_theta_values) planning_cost=$(planning_sol.planning_cost) planning_max=$(maximum(planning_values)) planning_min=$(minimum(planning_values))"
+			@info "LEXICOGRAPHIC_PHASE1_LEVEL_MASTER_SOLVED: k=$(k) lower_bound=$(phase1_lower_bound) incumbent=$(best_sum_phase1) level=$(phase1_level) base_level_fraction=$(settings.level_fraction) adaptive_level_fraction=$(adaptive_level_fraction) null_steps=$(null_steps) raw_theta_values=$(raw_phase1_theta_values) planning_cost=$(planning_sol.planning_cost) planning_max=$(maximum(planning_values)) planning_min=$(minimum(planning_values))"
 			flush(stdout)
 			flush(stderr)
 		end

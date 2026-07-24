@@ -633,6 +633,7 @@ using JuMP
             "BENDERS_LEXICOGRAPHIC_PHASE1_MAX_ITERATIONS",
             "BENDERS_LEXICOGRAPHIC_PHASE1_SLACK_TOLERANCE",
             "BENDERS_LEXICOGRAPHIC_PHASE1_LEVEL_FRACTION",
+            "BENDERS_LEXICOGRAPHIC_PHASE1_NULL_STEP_CONTRACTION",
         )
         original_values = Dict(
             name => get(ENV, name, nothing) for name in environment_names
@@ -642,12 +643,17 @@ using JuMP
             ENV["BENDERS_LEXICOGRAPHIC_PHASE1_MAX_ITERATIONS"] = "7"
             ENV["BENDERS_LEXICOGRAPHIC_PHASE1_SLACK_TOLERANCE"] = "1e-8"
             ENV["BENDERS_LEXICOGRAPHIC_PHASE1_LEVEL_FRACTION"] = "0.4"
+            ENV["BENDERS_LEXICOGRAPHIC_PHASE1_NULL_STEP_CONTRACTION"] = "0.25"
             settings = MacroEnergySolvers._lexicographic_phase1_settings()
             @test settings.enabled
             @test settings.max_iterations == 7
             @test settings.slack_tolerance == 1e-8
             @test settings.level_fraction == 0.4
+            @test settings.null_step_contraction == 0.25
             ENV["BENDERS_LEXICOGRAPHIC_PHASE1_LEVEL_FRACTION"] = "1.0"
+            @test_throws ErrorException MacroEnergySolvers._lexicographic_phase1_settings()
+            ENV["BENDERS_LEXICOGRAPHIC_PHASE1_LEVEL_FRACTION"] = "0.4"
+            ENV["BENDERS_LEXICOGRAPHIC_PHASE1_NULL_STEP_CONTRACTION"] = "1.0"
             @test_throws ErrorException MacroEnergySolvers._lexicographic_phase1_settings()
         finally
             for (name, value) in original_values
@@ -724,6 +730,72 @@ using JuMP
             100.0,
             1e-6,
         )
+        @test MacroEnergySolvers._lexicographic_phase1_adaptive_level_fraction(
+            0.5,
+            0,
+            0.5,
+        ) == 0.5
+        @test MacroEnergySolvers._lexicographic_phase1_adaptive_level_fraction(
+            0.5,
+            1,
+            0.5,
+        ) == 0.75
+        @test MacroEnergySolvers._lexicographic_phase1_adaptive_level_fraction(
+            0.5,
+            2,
+            0.5,
+        ) == 0.875
+        @test_throws ErrorException MacroEnergySolvers._lexicographic_phase1_adaptive_level_fraction(
+            0.5,
+            -1,
+            0.5,
+        )
+
+        metric_master = Model()
+        @variable(metric_master, metric_x)
+        @variable(metric_master, metric_y)
+        @variable(metric_master, vTHETA_metric)
+        metric_center = (
+            planning_cost=0.0,
+            values=Dict(
+                "metric_x" => 2.0,
+                "metric_y" => -3.0,
+                "vTHETA_metric" => 0.0,
+            ),
+        )
+        metric_raw = (
+            planning_cost=0.0,
+            values=Dict(
+                "metric_x" => 100.0,
+                "metric_y" => -20.0,
+                "vTHETA_metric" => 0.0,
+            ),
+        )
+        metric = MacroEnergySolvers._feasibility_proximal_metric(
+            metric_master,
+            ["metric_x", "metric_y", "vTHETA_metric"],
+            metric_raw,
+            metric_center,
+        )
+        @test metric.variables == ["metric_x", "metric_y"]
+        @test metric.scales == Dict("metric_x" => 100.0, "metric_y" => 20.0)
+
+        changed_raw = (
+            planning_cost=0.0,
+            values=Dict(
+                "metric_x" => 1.0e9,
+                "metric_y" => -1.0e9,
+                "vTHETA_metric" => 0.0,
+            ),
+        )
+        frozen_metric = MacroEnergySolvers._feasibility_proximal_metric(
+            metric_master,
+            ["metric_x", "metric_y", "vTHETA_metric"],
+            changed_raw,
+            metric_center;
+            fixed_proximal_scales=metric.scales,
+        )
+        @test frozen_metric.scales == metric.scales
     end
     @testset "Code quality (Aqua.jl)" begin
         Aqua.test_all(MacroEnergySolvers)
