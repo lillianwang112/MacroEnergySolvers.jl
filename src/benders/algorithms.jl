@@ -37,6 +37,99 @@ A. Jacobson, F. Pecci, N. Sepulveda, Q. Xu, and J. Jenkins (2024). “A computat
 - `cpu_time`: CPU time history
 - `planning_sol_hist`: Solution history for linking variables
 """
+
+mutable struct _BendersCutRecord
+    constraint::Any
+    subproblem::Any
+    iteration::Int
+    is_feasibility::Bool
+    inactive_iterations::Int
+end
+
+function _master_constraint_count(m::Model)
+    return sum(
+        num_constraints(m, F, S)
+        for (F, S) in list_of_constraint_types(m)
+    )
+end
+
+function _log_master_size(m::Model, cuts::Vector{_BendersCutRecord}, k::Int)
+    feasibility_cuts = count(cut -> cut.is_feasibility, cuts)
+    optimality_cuts = length(cuts) - feasibility_cuts
+    @info(
+        "BENDERS_MASTER_SIZE k=$k variables=$(num_variables(m)) " *
+        "constraints=$(_master_constraint_count(m)) cuts=$(length(cuts)) " *
+        "feasibility_cuts=$feasibility_cuts optimality_cuts=$optimality_cuts",
+    )
+    return nothing
+end
+
+function _cut_slack(cut::_BendersCutRecord)
+    object = constraint_object(cut.constraint)
+    function_value = value(object.func)
+    if object.set isa MOI.GreaterThan
+        bound = object.set.lower
+        slack = function_value - bound
+    elseif object.set isa MOI.LessThan
+        bound = object.set.upper
+        slack = bound - function_value
+    else
+        return 0.0, 0.0
+    end
+    scale = max(1.0, abs(function_value), abs(bound))
+    return slack, slack / scale
+end
+
+function _identify_inactive_optimality_cuts!(
+    cuts::Vector{_BendersCutRecord},
+    k::Int;
+    min_age::Int,
+    inactive_iterations::Int,
+    keep_recent::Int,
+    abs_tol::Float64,
+    rel_tol::Float64,
+    max_deletes::Int,
+)
+    candidates = Tuple{_BendersCutRecord,Float64}[]
+    for cut in cuts
+        if cut.is_feasibility || k - cut.iteration < min_age ||
+           cut.iteration > k - keep_recent
+            cut.inactive_iterations = 0
+            continue
+        end
+
+        absolute_slack, relative_slack = _cut_slack(cut)
+        if absolute_slack > abs_tol && relative_slack > rel_tol
+            cut.inactive_iterations += 1
+        else
+            cut.inactive_iterations = 0
+        end
+        cut.inactive_iterations >= inactive_iterations &&
+            push!(candidates, (cut, relative_slack))
+    end
+
+    sort!(candidates; by=last, rev=true)
+    delete_limit = max_deletes == 0 ? length(candidates) :
+                   min(max_deletes, length(candidates))
+    return first.(first(candidates, delete_limit))
+end
+
+function _apply_cut_deletions!(
+    m::Model,
+    cuts::Vector{_BendersCutRecord},
+    pending_deletions::Vector{_BendersCutRecord},
+)
+    isempty(pending_deletions) && return 0
+    deleted_constraints = Set(cut.constraint for cut in pending_deletions)
+    for cut in pending_deletions
+        delete(m, cut.constraint)
+    end
+    retained = [cut for cut in cuts if !(cut.constraint in deleted_constraints)]
+    empty!(cuts)
+    append!(cuts, retained)
+    return length(pending_deletions)
+end
+
 function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any}},DistributedArrays.DArray},linking_variables_sub::Dict,setup::Dict, reformat_logging::Bool=false)
 	
     #### Algorithm from:
@@ -105,6 +198,31 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 	MaxCpuTime = setup[:MaxCpuTime];
 	γ = setup[:StabParam];
 	term_status = "NONE";
+
+    cut_pruning = Bool(get(setup, :CutPruning, false))
+    pruning_start_iter = Int(get(setup, :CutPruningStartIter, 30))
+    pruning_min_age = Int(get(setup, :CutPruningMinAge, 10))
+    pruning_inactive_iters = Int(get(setup, :CutPruningInactiveIters, 5))
+    pruning_keep_recent = Int(get(setup, :CutPruningKeepRecent, 5))
+    pruning_abs_tol = Float64(get(setup, :CutPruningAbsTol, 1e-6))
+    pruning_rel_tol = Float64(get(setup, :CutPruningRelTol, 1e-7))
+    pruning_max_deletes = Int(get(setup, :CutPruningMaxDeletesPerIter, 0))
+    pruning_start_iter >= 0 || throw(ArgumentError("CutPruningStartIter must be nonnegative"))
+    pruning_min_age >= 1 || throw(ArgumentError("CutPruningMinAge must be positive"))
+    pruning_inactive_iters >= 1 || throw(ArgumentError("CutPruningInactiveIters must be positive"))
+    pruning_keep_recent >= 1 || throw(ArgumentError("CutPruningKeepRecent must be positive"))
+    pruning_abs_tol >= 0 || throw(ArgumentError("CutPruningAbsTol must be nonnegative"))
+    pruning_rel_tol >= 0 || throw(ArgumentError("CutPruningRelTol must be nonnegative"))
+    pruning_max_deletes >= 0 || throw(ArgumentError("CutPruningMaxDeletesPerIter must be nonnegative"))
+    if cut_pruning
+        @info(
+            "Benders cut pruning enabled: feasibility cuts are permanent; " *
+            "start_iter=$pruning_start_iter min_age=$pruning_min_age " *
+            "inactive_iters=$pruning_inactive_iters keep_recent=$pruning_keep_recent " *
+            "abs_tol=$pruning_abs_tol rel_tol=$pruning_rel_tol " *
+            "max_deletes_per_iter=$pruning_max_deletes",
+        )
+    end
 
 	stab_dynamic = setup[:StabDynamic];
 
@@ -185,9 +303,33 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 	planning_sol_hist = [planning_sol.values[s] for s in planning_variables];
 
     #### Run Benders iterations
-    # Track all Farkas cuts to verify they are not violated by subsequent planning solutions.
-    # Each entry: (w, lambda vector, linking variable names, cert at generation time, k_added)
+    diagnostics_enabled = _benders_diagnostics_enabled()
+    causal_diagnostic_iter = let raw = strip(get(ENV, "BENDERS_CAUSAL_DIAGNOSTIC_ITER", ""))
+        if isempty(raw)
+            nothing
+        else
+            parsed = tryparse(Int, raw)
+            isnothing(parsed) && throw(ArgumentError(
+                "BENDERS_CAUSAL_DIAGNOSTIC_ITER must be a nonnegative integer; got '$raw'",
+            ))
+            parsed >= 0 || throw(ArgumentError(
+                "BENDERS_CAUSAL_DIAGNOSTIC_ITER must be nonnegative; got $parsed",
+            ))
+            parsed
+        end
+    end
+    causal_unst_infeasible = nothing
+    if !isnothing(causal_diagnostic_iter)
+        @info(
+            "BENDERS_CAUSAL_DIAGNOSTIC enabled at k=$causal_diagnostic_iter: " *
+            "one extra read-only subproblem sweep will evaluate unst_planning_sol; " *
+            "its cuts will not be added to the master.",
+        )
+    end
+    # Retaining every Farkas ray is only needed for an explicit certificate audit.
     historical_farkas_cuts = NamedTuple{(:w, :lambda, :linking_vars, :cert, :k_added), Tuple{Any,Vector{Float64},Vector{String},Float64,Int}}[]
+    benders_cuts = _BendersCutRecord[]
+    pending_cut_deletions = _BendersCutRecord[]
 
     for k = 0:MaxIter
 
@@ -200,6 +342,31 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 		cpu_subop_sol = time()-start_subop_sol;
 		@info("Solving the subproblems required $(tidy_timing(cpu_subop_sol)) seconds")
 
+        if !isnothing(causal_unst_infeasible) && k == causal_diagnostic_iter + 1
+            causal_stab_infeasible = Set(
+                w for (w, sol) in subop_sol if sol.theta_coeff == 0
+            )
+            only_unst = sort!(collect(setdiff(causal_unst_infeasible, causal_stab_infeasible)))
+            only_stab = sort!(collect(setdiff(causal_stab_infeasible, causal_unst_infeasible)))
+            both = intersect(causal_unst_infeasible, causal_stab_infeasible)
+            sample_limit = 20
+            @info(
+                "BENDERS_CAUSAL_COMPARISON: source_k=$causal_diagnostic_iter " *
+                "unst_infeasible=$(length(causal_unst_infeasible))/$(length(subop_sol)) " *
+                "stab_infeasible=$(length(causal_stab_infeasible))/$(length(subop_sol)) " *
+                "both=$(length(both)) only_unst=$(length(only_unst)) " *
+                "only_stab=$(length(only_stab))",
+            )
+            !isempty(only_unst) && @info(
+                "BENDERS_CAUSAL_ONLY_UNST sample=" *
+                string(first(only_unst, min(sample_limit, length(only_unst)))),
+            )
+            !isempty(only_stab) && @info(
+                "BENDERS_CAUSAL_ONLY_STAB sample=" *
+                string(first(only_stab, min(sample_limit, length(only_stab)))),
+            )
+        end
+
 		UBnew = compute_upper_bound(planning_problem,planning_sol,subop_sol);
 		if UBnew < UB
 			planning_sol_best = deepcopy(planning_sol);
@@ -210,17 +377,43 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 		@info("Updating the planning problem....")
 		time_start_update = time()
 
-		update_planning_problem_multi_cuts!(planning_problem,subop_sol,planning_sol,linking_variables_sub,k)
+        # Apply deletions identified at the previous solved master point before
+        # adding this iteration's cuts. Every modified master is therefore
+        # re-solved before bounds, duals, or outputs are queried.
+        if !isempty(pending_cut_deletions)
+            deleted_cuts = _apply_cut_deletions!(
+                planning_problem,
+                benders_cuts,
+                pending_cut_deletions,
+            )
+            empty!(pending_cut_deletions)
+            @info(
+                "BENDERS_CUT_PRUNING k=$k deleted=$deleted_cuts " *
+                "remaining_before_add=$(length(benders_cuts))",
+            )
+        end
 
-        # Record Farkas cuts added this iteration for cross-iteration violation checking.
-        for (w, sol) in subop_sol
-            if sol.theta_coeff == 0
-                push!(historical_farkas_cuts, (w=w, lambda=copy(sol.lambda), linking_vars=copy(linking_variables_sub[w]), cert=sol.op_cost, k_added=k))
+		update_planning_problem_multi_cuts!(
+            planning_problem,
+            subop_sol,
+            planning_sol,
+            linking_variables_sub,
+            k,
+            benders_cuts,
+        )
+
+        if diagnostics_enabled
+            # Record Farkas cuts for cross-iteration violation checking.
+            for (w, sol) in subop_sol
+                if sol.theta_coeff == 0
+                    push!(historical_farkas_cuts, (w=w, lambda=copy(sol.lambda), linking_vars=copy(linking_variables_sub[w]), cert=sol.op_cost, k_added=k))
+                end
             end
         end
 
 		time_planning_update = time()-time_start_update
 		@info("Done updating the planning problem. It took $(tidy_timing(time_planning_update)) seconds).")
+        _log_master_size(planning_problem, benders_cuts, k)
 
 		start_planning_sol = time()
 
@@ -231,9 +424,28 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 
 		LB = max(LB,LBnew);
 		@info("The optimal value of the planning problem is $(obj_scale * LBnew) (scaled: $LBnew)")
-		n_nonzero = sum(abs(v) > 1e-6 for v in values(unst_planning_sol.values))
-		cap_vals = collect(values(unst_planning_sol.values))
-		@info "Planning solution summary: $(n_nonzero)/$(length(planning_variables)) variables non-zero, sum=$(round(sum(cap_vals), sigdigits=4)), max=$(round(maximum(cap_vals), sigdigits=4)), min=$(round(minimum(cap_vals), sigdigits=4))"
+		if diagnostics_enabled
+			n_nonzero = sum(abs(v) > 1e-6 for v in values(unst_planning_sol.values))
+			cap_vals = collect(values(unst_planning_sol.values))
+			@info "Planning solution summary: $(n_nonzero)/$(length(planning_variables)) variables non-zero, sum=$(round(sum(cap_vals), sigdigits=4)), max=$(round(maximum(cap_vals), sigdigits=4)), min=$(round(minimum(cap_vals), sigdigits=4))"
+		end
+
+        if cut_pruning && k >= pruning_start_iter
+            pending_cut_deletions = _identify_inactive_optimality_cuts!(
+                benders_cuts,
+                k;
+                min_age=pruning_min_age,
+                inactive_iterations=pruning_inactive_iters,
+                keep_recent=pruning_keep_recent,
+                abs_tol=pruning_abs_tol,
+                rel_tol=pruning_rel_tol,
+                max_deletes=pruning_max_deletes,
+            )
+            !isempty(pending_cut_deletions) && @info(
+                "BENDERS_CUT_PRUNING_MARKED k=$k " *
+                "for_next_iteration=$(length(pending_cut_deletions))",
+            )
+        end
 
 		running_gap = (UB-LB)/abs(LB)
 
@@ -242,8 +454,9 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
         append!(cpu_time,time()-solver_start_time)
 		append!(gap_hist, running_gap)
 
-		info_string = "k = $k      LB = $(round_from_tol(obj_scale * LB, ConvTol, 2))     UB = $(round_from_tol(obj_scale * UB, ConvTol, 2))       Gap = $(round_from_tol(running_gap, ConvTol, 2))       CPU Time = $(tidy_timing(cpu_time[end]))"
-		if any(subop_sol[w].theta_coeff==0 for w in keys(subop_sol))
+		n_infeasible = count(sol -> sol.theta_coeff == 0, values(subop_sol))
+		info_string = "k = $k      LB = $(round_from_tol(obj_scale * LB, ConvTol, 2))     UB = $(round_from_tol(obj_scale * UB, ConvTol, 2))       Gap = $(round_from_tol(running_gap, ConvTol, 2))       Infeasible = $n_infeasible/$(length(subop_sol))       CPU Time = $(tidy_timing(cpu_time[end]))"
+		if n_infeasible > 0
 			@info("*** $info_string")
 		else
 			@info("$info_string")
@@ -337,46 +550,73 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 
 		end
 
-        # Post-stabilization diagnostics: planning_sol is now the actual point sent to subproblems.
-        stab_max_diff = isempty(unst_planning_sol.values) ? 0.0 : maximum(abs(get(planning_sol.values, vk, 0.0) - get(unst_planning_sol.values, vk, 0.0)) for vk in keys(unst_planning_sol.values))
-        @info "STAB_DIFF: max|planning_sol - unst_planning_sol| = $(round(stab_max_diff, sigdigits=4))"
+        if diagnostics_enabled
+            # Post-stabilization diagnostics: planning_sol is the point sent to subproblems.
+            stab_max_diff = isempty(unst_planning_sol.values) ? 0.0 : maximum(abs(get(planning_sol.values, vk, 0.0) - get(unst_planning_sol.values, vk, 0.0)) for vk in keys(unst_planning_sol.values))
+            @info "STAB_DIFF: max|planning_sol - unst_planning_sol| = $(round(stab_max_diff, sigdigits=4))"
 
-        # Log aggregate vSTOR_CHANGE sums for hydro assets at both candidates.
-        hydro_keys = filter(v -> contains(v, "vSTOR_CHANGE") && contains(v, "hydroelectric"), collect(keys(unst_planning_sol.values)))
-        if !isempty(hydro_keys)
-            period_groups = Dict{String,Vector{String}}()
-            for v in hydro_keys
-                m_ps = match(r"(period\d+\[\d+\])$", v)
-                key_ps = isnothing(m_ps) ? "unknown" : m_ps.captures[1]
-                push!(get!(period_groups, key_ps, String[]), v)
+            # Log aggregate vSTOR_CHANGE sums for hydro assets at both candidates.
+            hydro_keys = filter(v -> contains(v, "vSTOR_CHANGE") && contains(v, "hydroelectric"), collect(keys(unst_planning_sol.values)))
+            if !isempty(hydro_keys)
+                period_groups = Dict{String,Vector{String}}()
+                for v in hydro_keys
+                    m_ps = match(r"(period\d+\[\d+\])$", v)
+                    key_ps = isnothing(m_ps) ? "unknown" : m_ps.captures[1]
+                    push!(get!(period_groups, key_ps, String[]), v)
+                end
+                for (ps, vars) in sort(collect(period_groups), by=first)
+                    sum_unst = sum(get(unst_planning_sol.values, v, 0.0) for v in vars)
+                    sum_stab = sum(get(planning_sol.values, v, 0.0) for v in vars)
+                    @info "HYDRO_SUM: $(ps) unst=$(round(sum_unst,sigdigits=4)) stab=$(round(sum_stab,sigdigits=4)) Δ=$(round(sum_stab-sum_unst,sigdigits=4))"
+                end
             end
-            for (ps, vars) in sort(collect(period_groups), by=first)
-                sum_unst = sum(get(unst_planning_sol.values, v, 0.0) for v in vars)
-                sum_stab = sum(get(planning_sol.values, v, 0.0) for v in vars)
-                @info "HYDRO_SUM: $(ps) unst=$(round(sum_unst,sigdigits=4)) stab=$(round(sum_stab,sigdigits=4)) Δ=$(round(sum_stab-sum_unst,sigdigits=4))"
+
+            # Per-cut causal split: log λᵀx at both candidates.
+            for cut in historical_farkas_cuts
+                lhs_unst = sum(cut.lambda[i] * get(unst_planning_sol.values, cut.linking_vars[i], 0.0) for i in 1:length(cut.linking_vars))
+                lhs_stab = sum(cut.lambda[i] * (haskey(planning_sol.values, cut.linking_vars[i]) ? planning_sol.values[cut.linking_vars[i]] : error("FARKAS_CAUSAL: missing $(cut.linking_vars[i])")) for i in 1:length(cut.linking_vars))
+                @info "FARKAS_CAUSAL: w=$(cut.w) k_added=$(cut.k_added) λᵀx_unst=$(round(lhs_unst,sigdigits=4)) λᵀx_stab=$(round(lhs_stab,sigdigits=4)) Δ=$(round(lhs_stab-lhs_unst,sigdigits=4))"
+            end
+
+            # Cross-iteration Farkas cut violation check on stabilized planning_sol.
+            n_cut_violations = 0
+            for cut in historical_farkas_cuts
+                lhs = sum(cut.lambda[i] * (haskey(planning_sol.values, cut.linking_vars[i]) ? planning_sol.values[cut.linking_vars[i]] : error("FARKAS_CUT_CHECK: variable $(cut.linking_vars[i]) missing from planning_sol.values")) for i in 1:length(cut.linking_vars))
+                if lhs > 1e-4
+                    n_cut_violations += 1
+                    @warn "FARKAS_CUT_VIOLATION: w=$(cut.w) k_added=$(cut.k_added) lambda^T*planning_sol=$(round(lhs,sigdigits=4)) > 0 (cut requires ≤ 0); cert=$(round(cut.cert,sigdigits=4))"
+                end
+            end
+            if n_cut_violations == 0 && !isempty(historical_farkas_cuts)
+                @info "FARKAS_CUT_CHECK: all $(length(historical_farkas_cuts)) historical Farkas cuts satisfied at stabilized planning_sol"
+            elseif n_cut_violations > 0
+                @warn "FARKAS_CUT_CHECK: $(n_cut_violations)/$(length(historical_farkas_cuts)) historical Farkas cuts VIOLATED at stabilized planning_sol — stabilization moved solution outside feasible cone"
             end
         end
 
-        # Per-cut causal split: log λᵀx at both unstabilized and stabilized candidates.
-        for cut in historical_farkas_cuts
-            lhs_unst = sum(cut.lambda[i] * get(unst_planning_sol.values, cut.linking_vars[i], 0.0) for i in 1:length(cut.linking_vars))
-            lhs_stab = sum(cut.lambda[i] * (haskey(planning_sol.values, cut.linking_vars[i]) ? planning_sol.values[cut.linking_vars[i]] : error("FARKAS_CAUSAL: missing $(cut.linking_vars[i])")) for i in 1:length(cut.linking_vars))
-            @info "FARKAS_CAUSAL: w=$(cut.w) k_added=$(cut.k_added) λᵀx_unst=$(round(lhs_unst,sigdigits=4)) λᵀx_stab=$(round(lhs_stab,sigdigits=4)) Δ=$(round(lhs_stab-lhs_unst,sigdigits=4))"
-        end
-
-        # Cross-iteration Farkas cut violation check on stabilized planning_sol.
-        n_cut_violations = 0
-        for cut in historical_farkas_cuts
-            lhs = sum(cut.lambda[i] * (haskey(planning_sol.values, cut.linking_vars[i]) ? planning_sol.values[cut.linking_vars[i]] : error("FARKAS_CUT_CHECK: variable $(cut.linking_vars[i]) missing from planning_sol.values")) for i in 1:length(cut.linking_vars))
-            if lhs > 1e-4
-                n_cut_violations += 1
-                @warn "FARKAS_CUT_VIOLATION: w=$(cut.w) k_added=$(cut.k_added) lambda^T*planning_sol=$(round(lhs,sigdigits=4)) > 0 (cut requires ≤ 0); cert=$(round(cut.cert,sigdigits=4))"
-            end
-        end
-        if n_cut_violations == 0 && !isempty(historical_farkas_cuts)
-            @info "FARKAS_CUT_CHECK: all $(length(historical_farkas_cuts)) historical Farkas cuts satisfied at stabilized planning_sol"
-        elseif n_cut_violations > 0
-            @warn "FARKAS_CUT_CHECK: $(n_cut_violations)/$(length(historical_farkas_cuts)) historical Farkas cuts VIOLATED at stabilized planning_sol — stabilization moved solution outside feasible cone"
+        if !isnothing(causal_diagnostic_iter) && k == causal_diagnostic_iter
+            @info(
+                "BENDERS_CAUSAL_UNST_SWEEP_BEGIN: k=$k; evaluating unst_planning_sol " *
+                "without updating the master",
+            )
+            causal_start = time()
+            causal_unst_sol = solve_subproblems(
+                subproblems,
+                unst_planning_sol,
+                expect_feasible_subproblems,
+                elastic_slack,
+            )
+            causal_unst_infeasible = Set(
+                w for (w, sol) in causal_unst_sol if sol.theta_coeff == 0
+            )
+            causal_elapsed = time() - causal_start
+            @info(
+                "BENDERS_CAUSAL_UNST_SWEEP_END: k=$k " *
+                "infeasible=$(length(causal_unst_infeasible))/$(length(causal_unst_sol)) " *
+                "time=$(tidy_timing(causal_elapsed)) seconds; no cuts added",
+            )
+            causal_unst_sol = nothing
+            GC.gc(false)
         end
 
     end
@@ -390,11 +630,43 @@ function benders(planning_problem::Model,subproblems::Union{Vector{Dict{Any, Any
 	
 end
 
-function update_planning_problem_multi_cuts!(m::Model,subop_sol::Dict,planning_sol::NamedTuple,linking_variables_sub::Dict,k::Int64)
+function update_planning_problem_multi_cuts!(
+    m::Model,
+    subop_sol::Dict,
+    planning_sol::NamedTuple,
+    linking_variables_sub::Dict,
+    k::Int64,
+    benders_cuts::Vector{_BendersCutRecord},
+)
 
 	W = keys(subop_sol);
 
-    @constraint(m,[w in W],subop_sol[w].theta_coeff*m[:vTHETA][w] >= subop_sol[w].op_cost + sum(subop_sol[w].lambda[i]*(variable_by_name(m,linking_variables_sub[w][i]) - planning_sol.values[linking_variables_sub[w][i]]) for i in 1:length(linking_variables_sub[w])), base_name="BendersCut_0_"*string(k));
+    for w in W
+        cut = @constraint(
+            m,
+            subop_sol[w].theta_coeff * m[:vTHETA][w] >=
+            subop_sol[w].op_cost +
+            sum(
+                subop_sol[w].lambda[i] *
+                (
+                    variable_by_name(m, linking_variables_sub[w][i]) -
+                    planning_sol.values[linking_variables_sub[w][i]]
+                )
+                for i in eachindex(linking_variables_sub[w])
+            ),
+            base_name="BendersCut_0_$(k)_$(w)",
+        )
+        push!(
+            benders_cuts,
+            _BendersCutRecord(
+                cut,
+                w,
+                k,
+                subop_sol[w].theta_coeff == 0,
+                0,
+            ),
+        )
+    end
 
 end
 
