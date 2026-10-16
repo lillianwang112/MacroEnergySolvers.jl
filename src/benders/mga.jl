@@ -262,20 +262,28 @@ function write_mga_checkpoint(
     variables::Vector{String},
     setup::Dict,
 )
+    # Operational subproblem solutions can be very large on full-year cases and
+    # are reproducible from the retained planning point. Keep the durable
+    # checkpoint compact so checkpointing does not exhaust a user's filesystem
+    # quota after a long direction solve.
+    checkpoint_result = merge(result, (subop_sol=nothing,))
     payload = (
-        schema_version=1,
+        schema_version=2,
         iteration=iteration,
         written_at=Dates.now(),
         variables=copy(variables),
         vector=collect(Float64, vector),
         mga_budget=Float64(setup[:MGABudget]),
-        result=result,
+        subproblem_solution_saved=false,
+        result=checkpoint_result,
     )
     stem = "mga_iteration_$(lpad(iteration, 4, '0'))"
-    binary_path = _atomic_serialize(joinpath(checkpoint_dir, stem * ".jls"), payload)
+    binary_path = joinpath(checkpoint_dir, stem * ".jls")
+    summary_path = joinpath(checkpoint_dir, stem * "_summary.tsv")
+    planning_path = joinpath(checkpoint_dir, stem * "_planning.tsv")
 
     summary = join([
-        "schema_version\t1",
+        "schema_version\t2",
         "iteration\t$iteration",
         "status\t$(result.status)",
         "converged\t$(result.converged)",
@@ -284,10 +292,35 @@ function write_mga_checkpoint(
         "best_true_system_cost\t$(result.best_true_system_cost)",
         "mga_budget\t$(setup[:MGABudget])",
         "budget_violation\t$(result.budget_violation)",
+        "subproblem_solution_saved\tfalse",
+        "planning_solution\t$(basename(planning_path))",
         "checkpoint\t$(basename(binary_path))",
     ], "\n") * "\n"
-    _write_text_atomic(joinpath(checkpoint_dir, stem * "_summary.tsv"), summary)
+    # Write the two transparent recovery artifacts before the binary payload.
+    # If the final serialization hits quota, the status and best planning point
+    # from the completed direction are still recoverable.
+    _write_text_atomic(summary_path, summary)
+    planning_lines = ["variable\tvalue"]
+    if !isnothing(result.planning_sol)
+        planning_values = result.planning_sol.values
+        for variable in sort!(collect(keys(planning_values)))
+            safe_variable = replace(String(variable), '\t' => ' ', '\n' => ' ')
+            push!(planning_lines, "$safe_variable\t$(planning_values[variable])")
+        end
+    end
+    _write_text_atomic(planning_path, join(planning_lines, "\n") * "\n")
+    _atomic_serialize(binary_path, payload)
     return binary_path
+end
+
+function _mga_budget_violation(true_system_cost::Real, budget::Real)
+    return isfinite(true_system_cost) ?
+        (true_system_cost - budget) / max(abs(budget), eps(Float64)) : Inf
+end
+
+function _within_mga_budget(true_system_cost::Real, budget::Real, relative_tolerance::Real)
+    relative_tolerance >= 0 || throw(ArgumentError("MGA budget tolerance must be nonnegative"))
+    return _mga_budget_violation(true_system_cost, budget) <= relative_tolerance
 end
 
 function _mga_result(
@@ -302,8 +335,7 @@ function _mga_result(
     budget,
     iteration_count,
 )
-    violation = isfinite(selected_true_system_cost) ?
-        (selected_true_system_cost - budget) / max(abs(budget), eps(Float64)) : Inf
+    violation = _mga_budget_violation(selected_true_system_cost, budget)
     return (
         status=status,
         converged=status == :converged,
@@ -339,6 +371,10 @@ function mga_cutting_plane(
     budget = Float64(setup[:MGABudget])
     relaxed_budget = Float64(get(setup, :MGARelaxBudget, get(setup, :RelaxBudget, 0.0)))
     relaxed_budget >= 0 || throw(ArgumentError("MGARelaxBudget must be nonnegative"))
+    @info(
+        "MGA budget=$budget relative_tolerance=$relaxed_budget " *
+        "effective_limit=$(budget + relaxed_budget * abs(budget))",
+    )
 
     approximate_cost_hist = Float64[]
     true_cost_hist = Float64[]
@@ -347,7 +383,7 @@ function mga_cutting_plane(
     subop_sol_best = nothing
     best_true_system_cost = Inf
 
-    planning_variables = name.(all_variables(planning_problem))
+    planning_variables = filter(!isempty, name.(all_variables(planning_problem)))
 
     for k in 1:max_iter
         start_planning = time()
@@ -368,6 +404,7 @@ function mga_cutting_plane(
         @info("Solving the subproblems required $(tidy_timing(subproblem_time)) seconds")
 
         operationally_feasible = all(sol.theta_coeff != 0 for sol in values(subop_sol))
+        infeasible_subproblems = count(sol -> sol.theta_coeff == 0, values(subop_sol))
         true_system_cost = operationally_feasible ?
             compute_upper_bound(planning_problem, planning_sol, subop_sol) : Inf
 
@@ -381,16 +418,18 @@ function mga_cutting_plane(
         push!(true_cost_hist, true_system_cost)
         push!(cpu_time, time() - solver_start_time)
 
-        budget_violation = isfinite(true_system_cost) ?
-            (true_system_cost - budget) / max(abs(budget), eps(Float64)) : Inf
+        budget_violation = _mga_budget_violation(true_system_cost, budget)
         @info(
             "MGA iteration=$mga_it inner_k=$k approximate_cost=$approximate_cost " *
             "true_cost=$true_system_cost best_true_cost=$best_true_system_cost " *
-            "operationally_feasible=$operationally_feasible budget_violation=$budget_violation " *
+            "operationally_feasible=$operationally_feasible " *
+            "infeasible_subproblems=$infeasible_subproblems/$(length(subop_sol)) " *
+            "budget_violation=$budget_violation " *
             "elapsed=$(tidy_timing(cpu_time[end]))",
         )
 
-        within_budget = operationally_feasible && budget_violation <= relaxed_budget
+        within_budget = operationally_feasible &&
+            _within_mga_budget(true_system_cost, budget, relaxed_budget)
         if within_budget && indicator == 1
             @info("MGA iteration $mga_it converged after $k inner iterations")
             return _mga_result(
@@ -576,15 +615,28 @@ function benders_mga(
             results[iteration] = result
 
             if !isnothing(checkpoint_dir)
-                checkpoint = write_mga_checkpoint(
-                    checkpoint_dir,
-                    iteration,
-                    result,
-                    view(vectors, :, iteration),
-                    variables,
-                    setup,
-                )
-                @info("Wrote durable MGA checkpoint: $checkpoint")
+                try
+                    checkpoint = write_mga_checkpoint(
+                        checkpoint_dir,
+                        iteration,
+                        result,
+                        view(vectors, :, iteration),
+                        variables,
+                        setup,
+                    )
+                    @info("Wrote durable MGA checkpoint: $checkpoint")
+                catch checkpoint_error
+                    stem = "mga_iteration_$(lpad(iteration, 4, '0'))"
+                    summary_path = joinpath(checkpoint_dir, stem * "_summary.tsv")
+                    planning_path = joinpath(checkpoint_dir, stem * "_planning.tsv")
+                    @error(
+                        "MGA direction $iteration completed, but its durable checkpoint failed. " *
+                        "Inspect $summary_path and $planning_path; these are written " *
+                        "before the compact binary checkpoint.",
+                        exception=(checkpoint_error, catch_backtrace()),
+                    )
+                    rethrow()
+                end
             end
             if !isnothing(iteration_callback)
                 iteration_callback(iteration, result, view(vectors, :, iteration), variables)

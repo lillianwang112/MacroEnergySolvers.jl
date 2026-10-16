@@ -83,14 +83,25 @@ using Serialization
                 )
                 @test isfile(path)
                 @test isfile(joinpath(checkpoint_dir, "mga_iteration_0001_summary.tsv"))
+                @test isfile(joinpath(checkpoint_dir, "mga_iteration_0001_planning.tsv"))
                 payload = open(deserialize, path)
-                @test payload.schema_version == 1
+                @test payload.schema_version == 2
+                @test payload.subproblem_solution_saved == false
                 @test payload.result.status == :converged
+                @test isnothing(payload.result.subop_sol)
+                @test payload.result.planning_sol.values["x"] == 1.0
                 @test payload.variables == ["vMGA[1]", "vMGA[2]"]
             end
+
+            @test MacroEnergySolvers._mga_budget_violation(10.00008, 10.0) ≈ 8e-6
+            @test !MacroEnergySolvers._within_mga_budget(10.00008, 10.0, 0.0)
+            @test MacroEnergySolvers._within_mga_budget(10.00008, 10.0, 1e-5)
+            @test !MacroEnergySolvers._within_mga_budget(Inf, 10.0, 1e-5)
+            @test_throws ArgumentError MacroEnergySolvers._within_mga_budget(10.0, 10.0, -1e-5)
         end
     end
     include("infeasible_solve_detection.jl")
+    include("master_domain_preservation.jl")
     @testset "Code quality (Aqua.jl)" begin
         Aqua.test_all(MacroEnergySolvers)
     end

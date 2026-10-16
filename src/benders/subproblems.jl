@@ -1,4 +1,10 @@
 
+const _TRUTHY_ENV_VALUES = Set(("1", "true", "yes", "on"))
+
+function _benders_diagnostics_enabled()
+    return lowercase(strip(get(ENV, "BENDERS_FARKAS_DEBUG", "false"))) in _TRUTHY_ENV_VALUES
+end
+
 function add_slacks_to_subproblems!(m_subproblems::Vector{Dict{Any, Any}})
     
     add_slacks_to_local_subproblems!(m_subproblems); 
@@ -69,7 +75,7 @@ function add_slacks_to_subproblem!(subproblem::Model)
     abs_coeffs = filter(c -> c > 0.0, [abs(coefficient(objfun, v)) for v in all_variables(subproblem)])
     raw_bigm = isempty(abs_coeffs) ? 1.0 : 100.0 * maximum(abs_coeffs)
     big_m = clamp(raw_bigm, 1.0, 1e8)
-    @info "ElasticSlack Big-M penalty: $(big_m) (raw=$(round(raw_bigm, sigdigits=3)), capped=$(raw_bigm != big_m))"
+    @debug "ElasticSlack Big-M penalty: $(big_m) (raw=$(round(raw_bigm, sigdigits=3)), capped=$(raw_bigm != big_m))"
     set_objective_function(subproblem, objfun + big_m * slack_max)
 
     fix.(slack_max,0.0);
@@ -136,9 +142,9 @@ function solve_subproblem(m::Model,planning_sol::NamedTuple,linking_variables_su
         if elastic_slack
             slack_val = value(m[:slack_max])
             if slack_val > 1e-6
-                @info "Subproblem elastic (slack=$(round(slack_val, sigdigits=4))): op_cost=$(round(op_cost, sigdigits=4)), lambda_norm=$(round(norm(lambda), sigdigits=4)), lambda_max=$(round(lmax, sigdigits=4))"
+                @debug "Subproblem elastic (slack=$(round(slack_val, sigdigits=4))): op_cost=$(round(op_cost, sigdigits=4)), lambda_norm=$(round(norm(lambda), sigdigits=4)), lambda_max=$(round(lmax, sigdigits=4))"
             else
-                @info "Subproblem feasible (slack=0): op_cost=$(round(op_cost, sigdigits=4)), lambda_norm=$(round(norm(lambda), sigdigits=4)), lambda_max=$(round(lmax, sigdigits=4))"
+                @debug "Subproblem feasible (slack=0): op_cost=$(round(op_cost, sigdigits=4)), lambda_norm=$(round(norm(lambda), sigdigits=4)), lambda_max=$(round(lmax, sigdigits=4))"
             end
             fix.(m[:slack_max], 0.0)  # re-fix for next iteration
         end
@@ -161,7 +167,7 @@ function solve_subproblem(m::Model,planning_sol::NamedTuple,linking_variables_su
         display(list_of_conflicting_constraints)
         error("The subproblem is infeasible, but ExpectFeasibleSubproblems = true. Benders likely did not converge before MaxIter was reached. Check conflicting constraints above.")
     else
-        @info "Subproblem is infeasible (status=$(termination_status(m)), primal=$(primal_status(m)), dual=$(dual_status(m))), attempting Farkas dual feasibility cut..."
+        @debug "Subproblem is infeasible (status=$(termination_status(m)), primal=$(primal_status(m)), dual=$(dual_status(m))), attempting Farkas dual feasibility cut..."
 
         # Attempt Farkas dual approach: extract dual ray directly without re-solving.
         # op_cost must be the full Farkas objective pi^T*b + lambda^T*x_bar (> 0 by certificate).
@@ -188,7 +194,7 @@ function solve_subproblem(m::Model,planning_sol::NamedTuple,linking_variables_su
             # Diagnostic: set BENDERS_FARKAS_DEBUG=true to validate cut pipeline.
             # cert = dual_objective_value(m)/lambda_scale is the complete Farkas proof.
             # separation_margin = cert = cut value at x_bar (must be >> FeasibilityTol=1e-6).
-            if get(ENV, "BENDERS_FARKAS_DEBUG", "false") == "true"
+            if _benders_diagnostics_enabled()
                 x_fixed    = [fix_value(variable_by_name(m, y)) for y in linking_variables_sub]
                 x_planning = [planning_sol.values[y] for y in linking_variables_sub]
                 max_diff   = isempty(x_fixed) ? 0.0 : maximum(abs.(x_fixed .- x_planning))
@@ -283,32 +289,33 @@ function solve_subproblem(m::Model,planning_sol::NamedTuple,linking_variables_su
                     end
                 end
             end
-            # Compute linking_farkas using fix_value (the actual fixed value Gurobi saw) to
-            # detect any mismatch vs planning_sol.values, which would corrupt the alpha term.
-            x_fixed_vals = [fix_value(variable_by_name(m, linking_variables_sub[i])) for i in 1:length(linking_variables_sub)]
-            linking_farkas_fixed  = sum(lambda[i] * x_fixed_vals[i]                                     for i in 1:length(linking_variables_sub))
-            linking_farkas_plan   = sum(lambda[i] * planning_sol.values[linking_variables_sub[i]]        for i in 1:length(linking_variables_sub))
-            max_fix_vs_plan_diff  = maximum(abs(x_fixed_vals[i] - planning_sol.values[linking_variables_sub[i]]) for i in 1:length(linking_variables_sub))
-            linking_farkas = linking_farkas_plan  # used in cut; must be consistent with x_bar in master cut formula
-            physical_farkas = cert - linking_farkas  # for logging; cert = physical_farkas + linking_farkas
-            # alpha = cert - lambda^T*x_bar = physical_farkas (relative to planning_sol)
-            # The cut added to master expands to: 0 >= alpha + lambda^T*x, where alpha=physical_farkas.
-            # alpha=0 => cut is 0 >= lambda^T*x (origin-passing halfspace); repeated identical (lambda,alpha)
-            # tuples are duplicate rows. Log relative alpha to distinguish from rounding artifacts.
-            alpha_rel = abs(physical_farkas) / max(1.0, abs(cert))
             op_cost = cert
             theta_coeff = 0;
-            n_nz = sum(abs.(lambda) .> 1e-8)
             if op_cost > 0
-                @info "Farkas cut (dual ray): op_cost=$(round(op_cost, sigdigits=4)) [physical=$(round(physical_farkas, sigdigits=6)) rel=$(round(alpha_rel, sigdigits=3)), linking_plan=$(round(linking_farkas_plan, sigdigits=4)) linking_fixed=$(round(linking_farkas_fixed, sigdigits=4))], lambda_norm=$(round(norm(lambda), sigdigits=4)), lambda_max=$(round(maximum(abs.(lambda)), sigdigits=4)), n_nonzero=$(n_nz)/$(length(lambda)), max_fix_vs_plan=$(round(max_fix_vs_plan_diff, sigdigits=3))"
-                # Log all nonzero-lambda variable names to identify repeated ray structure.
-                # Threshold raised to 50 (was 10) so the 20-nonzero case is always visible.
-                if n_nz <= 50
-                    for i in eachindex(linking_variables_sub)
-                        if abs(lambda[i]) > 1e-8
-                            pval  = planning_sol.values[linking_variables_sub[i]]
-                            fval  = x_fixed_vals[i]
-                            @info "  FARKAS_VAR var=$(linking_variables_sub[i]) λ=$(round(lambda[i],sigdigits=4)) x_plan=$(round(pval,sigdigits=4)) x_fixed=$(round(fval,sigdigits=4)) contrib_plan=$(round(lambda[i]*pval,sigdigits=4))"
+                if _benders_diagnostics_enabled()
+                    # These quantities are useful for certificate audits, but expensive and
+                    # extremely verbose for production cases with many linking variables.
+                    x_fixed_vals = [fix_value(variable_by_name(m, y)) for y in linking_variables_sub]
+                    linking_farkas_fixed = dot(lambda, x_fixed_vals)
+                    linking_farkas_plan = sum(
+                        lambda[i] * planning_sol.values[linking_variables_sub[i]]
+                        for i in eachindex(linking_variables_sub)
+                    )
+                    max_fix_vs_plan_diff = isempty(x_fixed_vals) ? 0.0 : maximum(
+                        abs(x_fixed_vals[i] - planning_sol.values[linking_variables_sub[i]])
+                        for i in eachindex(linking_variables_sub)
+                    )
+                    physical_farkas = cert - linking_farkas_plan
+                    alpha_rel = abs(physical_farkas) / max(1.0, abs(cert))
+                    n_nz = count(x -> abs(x) > 1e-8, lambda)
+                    @info "Farkas cut (dual ray): op_cost=$(round(op_cost, sigdigits=4)) [physical=$(round(physical_farkas, sigdigits=6)) rel=$(round(alpha_rel, sigdigits=3)), linking_plan=$(round(linking_farkas_plan, sigdigits=4)) linking_fixed=$(round(linking_farkas_fixed, sigdigits=4))], lambda_norm=$(round(norm(lambda), sigdigits=4)), lambda_max=$(round(maximum(abs.(lambda)), sigdigits=4)), n_nonzero=$(n_nz)/$(length(lambda)), max_fix_vs_plan=$(round(max_fix_vs_plan_diff, sigdigits=3))"
+                    if n_nz <= 50
+                        for i in eachindex(linking_variables_sub)
+                            if abs(lambda[i]) > 1e-8
+                                pval = planning_sol.values[linking_variables_sub[i]]
+                                fval = x_fixed_vals[i]
+                                @info "  FARKAS_VAR var=$(linking_variables_sub[i]) λ=$(round(lambda[i],sigdigits=4)) x_plan=$(round(pval,sigdigits=4)) x_fixed=$(round(fval,sigdigits=4)) contrib_plan=$(round(lambda[i]*pval,sigdigits=4))"
+                            end
                         end
                     end
                 end
@@ -358,7 +365,7 @@ function solve_subproblem(m::Model,planning_sol::NamedTuple,linking_variables_su
             op_cost = objective_value(m);
             lambda = [dual(FixRef(variable_by_name(m,y))) for y in linking_variables_sub];
             theta_coeff = 0;
-            @info "Slack feasibility cut: op_cost=$(round(op_cost, sigdigits=4)), lambda_norm=$(round(norm(lambda), sigdigits=4)), lambda_max=$(round(maximum(abs.(lambda)), sigdigits=4)), n_nonzero=$(sum(abs.(lambda) .> 1e-8))/$(length(lambda))"
+            @debug "Slack feasibility cut: op_cost=$(round(op_cost, sigdigits=4)), lambda_norm=$(round(norm(lambda), sigdigits=4)), lambda_max=$(round(maximum(abs.(lambda)), sigdigits=4)), n_nonzero=$(sum(abs.(lambda) .> 1e-8))/$(length(lambda))"
 
             try; set_attribute(m, "Crossover", 1); catch; end
             fix.(m[:slack_max], 0.0);
@@ -381,7 +388,7 @@ function solve_local_subproblems(subproblem_local::Vector{Dict{Any,Any}},plannin
         t_sp = @elapsed begin
             local_sol[w] = solve_subproblem(m,planning_sol,linking_variables_sub,expect_feasible_subproblems,elastic_slack);
         end
-        @info "Subproblem w=$(w): status=$(termination_status(m)) time=$(round(t_sp, digits=2))s theta_coeff=$(local_sol[w].theta_coeff)"
+        @debug "Subproblem w=$(w): status=$(termination_status(m)) time=$(round(t_sp, digits=2))s theta_coeff=$(local_sol[w].theta_coeff)"
     end
     return local_sol
 end
